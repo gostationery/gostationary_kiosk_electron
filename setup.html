@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GoStationary Kiosk – Setup</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f0f4f8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      color: #1a202c;
+    }
+
+    .card {
+      background: #ffffff;
+      border-radius: 16px;
+      box-shadow: 0 4px 32px rgba(0,0,0,0.12);
+      padding: 48px 40px 40px;
+      width: 420px;
+      max-width: 92vw;
+    }
+
+    .logo {
+      text-align: center;
+      margin-bottom: 28px;
+    }
+    .logo svg { width: 52px; height: 52px; }
+    .logo h1 {
+      font-size: 22px;
+      font-weight: 700;
+      margin-top: 10px;
+      letter-spacing: -0.3px;
+    }
+    .logo p {
+      font-size: 13px;
+      color: #718096;
+      margin-top: 4px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      color: #4a5568;
+      margin-bottom: 6px;
+    }
+
+    input {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.15s;
+      background: #f7fafc;
+    }
+    input:focus { border-color: #3182ce; background: #fff; }
+    input::placeholder { color: #a0aec0; }
+
+    .field { margin-bottom: 20px; }
+
+    .hint {
+      font-size: 11.5px;
+      color: #a0aec0;
+      margin-top: 5px;
+    }
+
+    button {
+      width: 100%;
+      padding: 13px;
+      background: #2b6cb0;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+      margin-top: 4px;
+    }
+    button:hover { background: #2c5282; }
+    button:disabled { background: #bee3f8; cursor: not-allowed; }
+
+    .error {
+      font-size: 13px;
+      color: #c53030;
+      margin-top: 12px;
+      text-align: center;
+      min-height: 20px;
+    }
+
+    .shortcut-hint {
+      text-align: center;
+      font-size: 11px;
+      color: #cbd5e0;
+      margin-top: 24px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">
+      <!-- Zap icon -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="#2b6cb0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+      </svg>
+      <h1>GoStationary Kiosk</h1>
+      <p>Enter your kiosk credentials to get started</p>
+    </div>
+
+    <form id="setup-form">
+      <div class="field">
+        <label for="domain">Organisation Domain</label>
+        <input
+          id="domain"
+          type="text"
+          placeholder="e.g. myorg"
+          autocomplete="off"
+          spellcheck="false"
+          required
+        />
+        <p class="hint">The short domain name assigned to your organisation.</p>
+      </div>
+
+      <div class="field">
+        <label for="serial">Machine Serial Number</label>
+        <input
+          id="serial"
+          type="text"
+          placeholder="e.g. K-001"
+          autocomplete="off"
+          spellcheck="false"
+          required
+        />
+        <p class="hint">Found on the sticker on your kiosk machine.</p>
+      </div>
+
+      <button type="submit" id="submit-btn">Launch Kiosk</button>
+      <p class="error" id="error-msg"></p>
+    </form>
+
+    <p class="shortcut-hint">
+      Press <strong>Ctrl+Shift+L</strong> (or <strong>⌘+Shift+L</strong> on Mac) at any time to return to this screen.
+    </p>
+  </div>
+
+  <script>
+    const form     = document.getElementById('setup-form')
+    const errorMsg = document.getElementById('error-msg')
+    const btn      = document.getElementById('submit-btn')
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      errorMsg.textContent = ''
+
+      const domain = document.getElementById('domain').value.trim()
+      const serial = document.getElementById('serial').value.trim()
+
+      if (!domain || !serial) {
+        errorMsg.textContent = 'Both fields are required.'
+        return
+      }
+
+      btn.disabled = true
+      btn.textContent = 'Connecting…'
+
+      try {
+        await window.electronAPI.saveConfig(domain, serial)
+        // Main process will navigate the window – nothing more needed here
+      } catch (err) {
+        errorMsg.textContent = err?.message || 'Something went wrong. Please try again.'
+        btn.disabled = false
+        btn.textContent = 'Launch Kiosk'
+      }
+    })
+  </script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+{
+  "name": "gostationary-kiosk",
+  "productName": "GoStationary Kiosk",
+  "version": "1.0.0",
+  "description": "GoStationary Kiosk Desktop App – wraps the kiosk web UI with silent printing",
+  "homepage": "https://gostationary.com",
+  "author": {
+    "name": "GoStationary",
+    "email": "support@gostationary.com"
+  },
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:linux": "electron-builder --linux",
+    "build:all": "electron-builder -mwl"
+  },
+  "build": {
+    "appId": "com.gostationary.kiosk",
+    "productName": "GoStationary Kiosk",
+    "copyright": "Copyright © 2026 GoStationary",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "setup.html",
+      "assets/**"
+    ],
+    "mac": {
+      "category": "public.app-category.business",
+      "icon": "assets/icon.icns",
+      "target": [
+        { "target": "dmg", "arch": ["universal"] },
+        { "target": "zip", "arch": ["universal"] }
+      ]
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "linux": {
+      "icon": "assets/icon.png",
+      "category": "Office",
+      "maintainer": "GoStationary <support@gostationary.com>",
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true
+    },
+    "publish": null
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}
