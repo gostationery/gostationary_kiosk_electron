@@ -1,7 +1,4 @@
-<<<<<<< HEAD
-# gostationary_kiosk_electron
-Kiosk System APP 
-=======
+
 # GoStationary Kiosk – Desktop App
 
 Electron wrapper for the GoStationary kiosk web frontend. Runs in fullscreen kiosk mode and prints bills **silently** to the first physical printer found (no print-dialog, no "Save as PDF").
