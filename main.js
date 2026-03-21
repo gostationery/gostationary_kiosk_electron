@@ -126,15 +126,27 @@ ipcMain.handle('silent-print', async () => {
       )
     })
 
+    // Thermal “heat” / density is usually set in the printer driver. We still bias
+    // Chromium toward a darker B&W raster: monochrome, backgrounds on, DPI where supported.
     const printOptions = {
-      silent: true,           // No dialog
-      printBackground: false,
-      deviceName: physicalPrinter?.name || '', // '' = OS default printer
+      silent: true,
+      printBackground: true,
+      color: false,
+      deviceName: physicalPrinter?.name || '',
+      // Chromium requires each margin ≥ ~352 µm; tiny values caused bad layout / drift.
       margins: {
         marginType: 'custom',
-        top: 0.1, bottom: 0.1, left: 0.1, right: 0.1,
+        top: 1000,
+        bottom: 1000,
+        left: 1500,
+        right: 1500,
       },
       pageSize: { width: 80000, height: 297000 }, // 80mm wide receipt paper (µm)
+    }
+
+    // Raster step for thermal (203 dpi is typical for 80mm); supported on Windows/Linux in Electron.
+    if (process.platform === 'win32' || process.platform === 'linux') {
+      printOptions.dpi = { horizontal: 203, vertical: 203 }
     }
 
     mainWindow.webContents.print(printOptions, (success, errorType) => {
