@@ -192,15 +192,30 @@
     async function loadPrinters() {
       // Always keep the "Default printer" option.
       printerSelect.innerHTML = '<option value="">Default printer (OS)</option>'
+
+      let savedPrinterName = ''
+      try {
+        const saved = await window.electronAPI.getSavedConfig()
+        savedPrinterName = saved?.printerName || ''
+      } catch {
+        // Non-fatal: just don't pre-select anything.
+      }
+
       try {
         const printers = await window.electronAPI.getPrinters()
+        const printerNames = new Set()
         printers.forEach((p) => {
           if (!p?.name) return
+          printerNames.add(p.name)
           const opt = document.createElement('option')
           opt.value = p.name
           opt.textContent = p.description ? `${p.description} (${p.name})` : p.name
           printerSelect.appendChild(opt)
         })
+
+        if (savedPrinterName && printerNames.has(savedPrinterName)) {
+          printerSelect.value = savedPrinterName
+        }
       } catch (err) {
         // Non-fatal: user can still launch the kiosk using OS default printer.
         printErrorMsg.textContent = err?.message || 'Could not load printers.'

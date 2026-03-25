@@ -21,6 +21,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPrinters: () => ipcRenderer.invoke('get-printers'),
 
   /**
+   * Used by setup.html to restore saved printer selection.
+   */
+  getSavedConfig: () => ipcRenderer.invoke('get-saved-config'),
+
+  /**
    * Print a known test receipt using the selected printer name.
    * Pass '' to use OS default.
    */

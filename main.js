@@ -5,8 +5,8 @@
  *  1. On first launch → show setup.html (enter org_domain + machine_serial)
  *  2. After setup → load https://gostationary-kiosk-frontend.vercel.app/{domain}/{serial}
  *  3. Stores config in userData/kiosk-config.json
- *  4. Ctrl/Cmd+Shift+L → clears config, returns to setup screen
- *  5. IPC 'silent-print' → prints the current page to the first non-PDF printer
+ *  4. Ctrl/Cmd+Shift+L → returns to setup screen (keeps printer selection)
+ *  5. IPC 'silent-print' → prints the current page to the selected printer
  */
 
 const {
@@ -99,7 +99,11 @@ app.whenReady().then(() => {
 
   // ── Logout shortcut: Ctrl+Shift+L / Cmd+Shift+L ─────────────────────────
   globalShortcut.register('CommandOrControl+Shift+L', () => {
+    // Preserve printerName so the user doesn't have to re-select it.
+    const prevCfg = loadConfig() || {}
+    const printerName = prevCfg?.printerName || ''
     clearConfig()
+    if (printerName) saveConfig({ printerName })
     mainWindow.loadFile(path.join(__dirname, 'setup.html'))
   })
 
@@ -137,6 +141,11 @@ ipcMain.handle('get-printers', async () => {
     .map((p) => ({ name: p.name, description: p.description }))
 
   return physical
+})
+
+// ── IPC: Saved config (for setup screen prefill) ─────────────────────────
+ipcMain.handle('get-saved-config', async () => {
+  return loadConfig() || {}
 })
 
 // ── IPC: Silent print ─────────────────────────────────────────────────────────
