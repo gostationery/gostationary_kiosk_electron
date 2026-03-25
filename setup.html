@@ -64,6 +64,18 @@
     input:focus { border-color: #3182ce; background: #fff; }
     input::placeholder { color: #a0aec0; }
 
+    select {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.15s;
+      background: #f7fafc;
+    }
+    select:focus { border-color: #3182ce; background: #fff; }
+
     .field { margin-bottom: 20px; }
 
     .hint {
@@ -87,6 +99,13 @@
     }
     button:hover { background: #2c5282; }
     button:disabled { background: #bee3f8; cursor: not-allowed; }
+
+    .secondary-btn {
+      background: #edf2f7;
+      color: #2d3748;
+      border: 1.5px solid #e2e8f0;
+    }
+    .secondary-btn:hover { background: #e2e8f0; }
 
     .error {
       font-size: 13px;
@@ -142,8 +161,19 @@
         <p class="hint">Found on the sticker on your kiosk machine.</p>
       </div>
 
+      <div class="field">
+        <label for="printer">Printer</label>
+        <select id="printer" name="printer">
+          <option value="">Default printer (OS)</option>
+        </select>
+        <p class="hint">Used for receipts and the test print below. You can leave it as default.</p>
+      </div>
+
+      <button type="button" id="print-test-btn" class="secondary-btn">Print test page</button>
+
       <button type="submit" id="submit-btn">Launch Kiosk</button>
       <p class="error" id="error-msg"></p>
+      <p class="error" id="print-error-msg"></p>
     </form>
 
     <p class="shortcut-hint">
@@ -154,7 +184,47 @@
   <script>
     const form     = document.getElementById('setup-form')
     const errorMsg = document.getElementById('error-msg')
+    const printErrorMsg = document.getElementById('print-error-msg')
     const btn      = document.getElementById('submit-btn')
+    const printerSelect = document.getElementById('printer')
+    const printTestBtn = document.getElementById('print-test-btn')
+
+    async function loadPrinters() {
+      // Always keep the "Default printer" option.
+      printerSelect.innerHTML = '<option value="">Default printer (OS)</option>'
+      try {
+        const printers = await window.electronAPI.getPrinters()
+        printers.forEach((p) => {
+          if (!p?.name) return
+          const opt = document.createElement('option')
+          opt.value = p.name
+          opt.textContent = p.description ? `${p.description} (${p.name})` : p.name
+          printerSelect.appendChild(opt)
+        })
+      } catch (err) {
+        // Non-fatal: user can still launch the kiosk using OS default printer.
+        printErrorMsg.textContent = err?.message || 'Could not load printers.'
+      }
+    }
+
+    loadPrinters()
+
+    printTestBtn.addEventListener('click', async () => {
+      printErrorMsg.textContent = ''
+      printTestBtn.disabled = true
+      const originalText = printTestBtn.textContent
+      printTestBtn.textContent = 'Printing…'
+
+      try {
+        const deviceName = printerSelect.value
+        await window.electronAPI.printTestPage(deviceName)
+      } catch (err) {
+        printErrorMsg.textContent = err?.message || 'Test print failed.'
+      } finally {
+        printTestBtn.disabled = false
+        printTestBtn.textContent = originalText
+      }
+    })
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault()
@@ -162,6 +232,7 @@
 
       const domain = document.getElementById('domain').value.trim()
       const serial = document.getElementById('serial').value.trim()
+      const printerName = printerSelect.value
 
       if (!domain || !serial) {
         errorMsg.textContent = 'Both fields are required.'
@@ -172,7 +243,7 @@
       btn.textContent = 'Connecting…'
 
       try {
-        await window.electronAPI.saveConfig(domain, serial)
+        await window.electronAPI.saveConfig(domain, serial, printerName)
         // Main process will navigate the window – nothing more needed here
       } catch (err) {
         errorMsg.textContent = err?.message || 'Something went wrong. Please try again.'

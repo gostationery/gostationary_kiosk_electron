@@ -16,8 +16,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   print: () => ipcRenderer.invoke('silent-print'),
 
   /**
+   * Fetch physical printers for the setup screen dropdown.
+   */
+  getPrinters: () => ipcRenderer.invoke('get-printers'),
+
+  /**
+   * Print a known test receipt using the selected printer name.
+   * Pass '' to use OS default.
+   */
+  printTestPage: (deviceName) => ipcRenderer.invoke('print-test-page', { deviceName }),
+
+  /**
    * Called by setup.html after the user enters org domain + serial.
    */
-  saveConfig: (domain, serial) =>
-    ipcRenderer.invoke('save-config', { domain, serial }),
+  saveConfig: (domain, serial, printerName = '') =>
+    ipcRenderer.invoke('save-config', { domain, serial, printerName }),
 })
