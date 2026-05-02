@@ -79,7 +79,46 @@ function pickPhysicalPrinter(printers) {
   })
 }
 
-function receiptPrintOptions(deviceName) {
+/** CSS reference px → microns (1px = 1/96 in at 96dpi). */
+const CSS_PX_TO_MICRONS = (25.4 / 96) * 1000
+const RECEIPT_WIDTH_MICRONS = 80000 // 80 mm roll
+const PAGE_HEIGHT_BUFFER_MICRONS = 4000 // ~4 mm slack for driver rounding
+const PAGE_HEIGHT_MIN_MICRONS = 353 // Chromium custom page minimum
+const PAGE_HEIGHT_MAX_MICRONS = 3_000_000 // 3 m cap (single job)
+
+function clampPageHeightMicrons(m) {
+  const n = Number(m)
+  if (!Number.isFinite(n)) return 150_000
+  return Math.round(
+    Math.min(PAGE_HEIGHT_MAX_MICRONS, Math.max(PAGE_HEIGHT_MIN_MICRONS, n)),
+  )
+}
+
+/** Height in microns from #kiosk-receipt-root (kiosk), or scroll root (other pages). */
+async function measureContentHeightMicrons(webContents) {
+  try {
+    const raw = await webContents.executeJavaScript(`(() => {
+      const kiosk = document.getElementById('kiosk-receipt-root')
+      const el = kiosk || document.body
+      if (!el) return 150000
+      const h = Math.ceil(
+        Math.max(
+          1,
+          el.scrollHeight,
+          el.getBoundingClientRect().height,
+          document.documentElement.scrollHeight,
+        ),
+      )
+      return Math.round(h * ${CSS_PX_TO_MICRONS}) + ${PAGE_HEIGHT_BUFFER_MICRONS}
+    })()`)
+    return clampPageHeightMicrons(raw)
+  } catch {
+    return clampPageHeightMicrons(150_000)
+  }
+}
+
+function receiptPrintOptions(deviceName, heightMicrons) {
+  const h = clampPageHeightMicrons(heightMicrons)
   return {
     silent: true,
     printBackground: false,
@@ -91,7 +130,7 @@ function receiptPrintOptions(deviceName) {
       left: 0.1,
       right: 0.1,
     },
-    pageSize: { width: 80000, height: 297000 },
+    pageSize: { width: RECEIPT_WIDTH_MICRONS, height: h },
   }
 }
 
@@ -230,8 +269,9 @@ ipcMain.handle('test-print', async (_event, deviceNameArg) => {
       'data:text/html;charset=utf-8,' + encodeURIComponent(testPrintHtml())
     win.loadURL(url)
     win.webContents.once('did-finish-load', () => {
-      setTimeout(() => {
-        win.webContents.print(receiptPrintOptions(deviceName), (success, errorType) => {
+      setTimeout(async () => {
+        const heightMicrons = await measureContentHeightMicrons(win.webContents)
+        win.webContents.print(receiptPrintOptions(deviceName, heightMicrons), (success, errorType) => {
           win.close()
           resolve({ success, errorType: success ? undefined : errorType })
         })
@@ -253,7 +293,8 @@ ipcMain.handle('silent-print', async () => {
       deviceName = pickPhysicalPrinter(printers)?.name || ''
     }
 
-    mainWindow.webContents.print(receiptPrintOptions(deviceName), (success, errorType) => {
+    const heightMicrons = await measureContentHeightMicrons(mainWindow.webContents)
+    mainWindow.webContents.print(receiptPrintOptions(deviceName, heightMicrons), (success, errorType) => {
       if (!success) {
         console.error('[GoStationary Kiosk] Print failed:', errorType)
       }
