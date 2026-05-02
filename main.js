@@ -4,9 +4,9 @@
  * Flow:
  *  1. On first launch → show setup.html (enter org_domain + machine_serial)
  *  2. After setup → load https://gostationary-kiosk-frontend.vercel.app/{domain}/{serial}
- *  3. Stores config in userData/kiosk-config.json
- *  4. Ctrl/Cmd+Shift+L → clears config, returns to setup screen
- *  5. IPC 'silent-print' → prints the current page to the first non-PDF printer
+ *  3. Stores config in userData/kiosk-config.json (optional: printerName, openAtLogin)
+ *  4. Ctrl/Cmd+Shift+L → clears domain/serial, returns to setup (keeps printer + boot prefs)
+ *  5. IPC 'silent-print' → prints using saved printer or first physical printer
  */
 
 const {
@@ -14,10 +14,9 @@ const {
   BrowserWindow,
   ipcMain,
   globalShortcut,
-  session,
 } = require('electron')
 const path = require('path')
-const fs   = require('fs')
+const fs = require('fs')
 
 // ── Config helpers ──────────────────────────────────────────────────────────
 const CONFIG_PATH = path.join(app.getPath('userData'), 'kiosk-config.json')
@@ -36,12 +35,79 @@ function saveConfig(cfg) {
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2))
 }
 
-function clearConfig() {
-  try { fs.unlinkSync(CONFIG_PATH) } catch {}
+function clearConfigFile() {
+  try {
+    fs.unlinkSync(CONFIG_PATH)
+  } catch {}
+}
+
+/** Remove pairing only; keep printerName + openAtLogin so kiosk staff shortcuts do not wipe device prefs. */
+function clearMachinePairing() {
+  const prev = loadConfig()
+  const next = {}
+  if (prev?.printerName) next.printerName = prev.printerName
+  if (typeof prev?.openAtLogin === 'boolean') next.openAtLogin = prev.openAtLogin
+  clearConfigFile()
+  if (Object.keys(next).length) saveConfig(next)
 }
 
 function kioskURL(cfg) {
-  return `https://gostationary-kiosk-frontend.vercel.app/${cfg.domain}/${cfg.serial}`
+  return `https://www.gostationary.in//${cfg.domain}/${cfg.serial}`
+}
+
+function applyOpenAtLoginFromConfig(cfg) {
+  const open = Boolean(cfg?.openAtLogin)
+  try {
+    app.setLoginItemSettings({ openAtLogin: open })
+  } catch (err) {
+    console.error('[GoStationary Kiosk] setLoginItemSettings:', err)
+  }
+}
+
+function pickPhysicalPrinter(printers) {
+  return printers.find((p) => {
+    const n = p.name.toLowerCase()
+    return (
+      !n.includes('pdf') &&
+      !n.includes('xps') &&
+      !n.includes('microsoft') &&
+      !n.includes('onenote') &&
+      !n.includes('fax') &&
+      !n.includes('send to') &&
+      !n.includes('adobe')
+    )
+  })
+}
+
+function receiptPrintOptions(deviceName) {
+  return {
+    silent: true,
+    printBackground: false,
+    deviceName: deviceName || '',
+    margins: {
+      marginType: 'custom',
+      top: 0.1,
+      bottom: 0.1,
+      left: 0.1,
+      right: 0.1,
+    },
+    pageSize: { width: 80000, height: 297000 },
+  }
+}
+
+function testPrintHtml() {
+  const when = new Date().toLocaleString()
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>
+    body { font-family: ui-monospace, monospace; padding: 12px; width: 72mm; margin: 0; color: #000; background: #fff; }
+    h1 { font-size: 14px; margin: 0 0 8px; }
+    p { font-size: 12px; margin: 6px 0; line-height: 1.4; }
+    .rule { border-top: 2px dashed #000; margin: 10px 0; }
+  </style></head><body>
+    <h1>GoStationary — test print</h1>
+    <p>This page confirms the kiosk can reach the selected printer when printing silently.</p>
+    <div class="rule"></div>
+    <p>${when}</p>
+  </body></html>`
 }
 
 // ── Window ───────────────────────────────────────────────────────────────────
@@ -56,12 +122,10 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      // Allow the kiosk Vercel URL to load without mixed-content issues
       webSecurity: true,
     },
   })
 
-  // Hide menu bar completely in kiosk mode
   mainWindow.setMenuBarVisibility(false)
 
   const cfg = loadConfig()
@@ -70,23 +134,19 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, 'setup.html'))
   }
-
-  // ── Dev-tools shortcut (Ctrl/Cmd+Shift+I) ─── remove for production build
-  // mainWindow.webContents.openDevTools()
 }
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  applyOpenAtLoginFromConfig(loadConfig())
   createWindow()
 
-  // ── Logout shortcut: Ctrl+Shift+L / Cmd+Shift+L ─────────────────────────
   globalShortcut.register('CommandOrControl+Shift+L', () => {
-    clearConfig()
+    clearMachinePairing()
     mainWindow.loadFile(path.join(__dirname, 'setup.html'))
   })
 
   app.on('activate', () => {
-    // macOS: re-create window when clicking dock icon
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
@@ -99,45 +159,101 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll()
 })
 
-// ── IPC: Setup form submitted ─────────────────────────────────────────────────
+// ── IPC: Setup / prefs ──────────────────────────────────────────────────────
 ipcMain.handle('save-config', (_event, cfg) => {
-  if (!cfg.domain || !cfg.serial) throw new Error('domain and serial are required')
-  saveConfig(cfg)
-  mainWindow.loadURL(kioskURL(cfg))
+  if (!cfg?.domain || !cfg?.serial) {
+    throw new Error('domain and serial are required')
+  }
+  const prev = loadConfig() || {}
+  const merged = {
+    ...prev,
+    domain: String(cfg.domain).trim(),
+    serial: String(cfg.serial).trim(),
+  }
+  if (cfg.printerName !== undefined) {
+    merged.printerName = cfg.printerName ? String(cfg.printerName) : ''
+  }
+  if (typeof cfg.openAtLogin === 'boolean') {
+    merged.openAtLogin = cfg.openAtLogin
+  }
+  saveConfig(merged)
+  applyOpenAtLoginFromConfig(merged)
+  mainWindow.loadURL(kioskURL(merged))
 })
 
-// ── IPC: Silent print ─────────────────────────────────────────────────────────
+ipcMain.handle('get-printers', async () => {
+  if (!mainWindow?.webContents) return []
+  return mainWindow.webContents.getPrintersAsync()
+})
+
+ipcMain.handle('get-kiosk-prefs', () => {
+  const cfg = loadConfig()
+  return {
+    printerName: cfg?.printerName || '',
+    openAtLogin: Boolean(cfg?.openAtLogin),
+  }
+})
+
+ipcMain.handle('set-printer', (_event, printerName) => {
+  const prev = loadConfig() || {}
+  saveConfig({ ...prev, printerName: printerName ? String(printerName) : '' })
+})
+
+ipcMain.handle('set-open-at-login', (_event, open) => {
+  const prev = loadConfig() || {}
+  const merged = { ...prev, openAtLogin: Boolean(open) }
+  saveConfig(merged)
+  applyOpenAtLoginFromConfig(merged)
+})
+
+ipcMain.handle('test-print', async (_event, deviceNameArg) => {
+  const cfg = loadConfig()
+  const fromArg = deviceNameArg != null && String(deviceNameArg).length > 0
+  let deviceName = fromArg ? String(deviceNameArg) : cfg?.printerName || ''
+  if (!deviceName && mainWindow?.webContents) {
+    const printers = await mainWindow.webContents.getPrintersAsync()
+    deviceName = pickPhysicalPrinter(printers)?.name || ''
+  }
+
+  return new Promise((resolve) => {
+    const win = new BrowserWindow({
+      show: false,
+      width: 420,
+      height: 640,
+      webPreferences: {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    })
+    const url =
+      'data:text/html;charset=utf-8,' + encodeURIComponent(testPrintHtml())
+    win.loadURL(url)
+    win.webContents.once('did-finish-load', () => {
+      setTimeout(() => {
+        win.webContents.print(receiptPrintOptions(deviceName), (success, errorType) => {
+          win.close()
+          resolve({ success, errorType: success ? undefined : errorType })
+        })
+      }, 300)
+    })
+  })
+})
+
+// ── IPC: Silent print (order receipt) ────────────────────────────────────────
 ipcMain.handle('silent-print', async () => {
   try {
-    // Get all available printers
+    const cfg = loadConfig()
     const printers = await mainWindow.webContents.getPrintersAsync()
-
-    // Pick first physical printer (exclude PDF writers / virtual printers)
-    const physicalPrinter = printers.find((p) => {
-      const n = p.name.toLowerCase()
-      return (
-        !n.includes('pdf') &&
-        !n.includes('xps') &&
-        !n.includes('microsoft') &&
-        !n.includes('onenote') &&
-        !n.includes('fax') &&
-        !n.includes('send to') &&
-        !n.includes('adobe')
-      )
-    })
-
-    const printOptions = {
-      silent: true,           // No dialog
-      printBackground: false,
-      deviceName: physicalPrinter?.name || '', // '' = OS default printer
-      margins: {
-        marginType: 'custom',
-        top: 0.1, bottom: 0.1, left: 0.1, right: 0.1,
-      },
-      pageSize: { width: 80000, height: 297000 }, // 80mm wide receipt paper (µm)
+    let deviceName = cfg?.printerName || ''
+    if (deviceName && !printers.some((p) => p.name === deviceName)) {
+      deviceName = ''
+    }
+    if (!deviceName) {
+      deviceName = pickPhysicalPrinter(printers)?.name || ''
     }
 
-    mainWindow.webContents.print(printOptions, (success, errorType) => {
+    mainWindow.webContents.print(receiptPrintOptions(deviceName), (success, errorType) => {
       if (!success) {
         console.error('[GoStationary Kiosk] Print failed:', errorType)
       }

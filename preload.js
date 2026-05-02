@@ -1,23 +1,24 @@
 /**
  * preload.js
- * Runs in the renderer process with access to both Node.js and the DOM.
- * contextBridge.exposeInMainWorld makes these APIs available as
- * window.electronAPI inside the kiosk web page.
+ * Exposes window.electronAPI to setup.html and the kiosk web page.
  */
 
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  /**
-   * Called by the kiosk React app on order success.
-   * Triggers a silent print on the desktop app using the default printer
-   * (set via OS / browser kiosk config – avoids the PDF dialog).
-   */
   print: () => ipcRenderer.invoke('silent-print'),
 
-  /**
-   * Called by setup.html after the user enters org domain + serial.
-   */
-  saveConfig: (domain, serial) =>
-    ipcRenderer.invoke('save-config', { domain, serial }),
+  /** Full setup payload: domain, serial, optional printerName, openAtLogin */
+  saveConfig: (cfg) => ipcRenderer.invoke('save-config', cfg),
+
+  getPrinters: () => ipcRenderer.invoke('get-printers'),
+
+  getKioskPrefs: () => ipcRenderer.invoke('get-kiosk-prefs'),
+
+  setPrinter: (printerName) => ipcRenderer.invoke('set-printer', printerName),
+
+  setOpenAtLogin: (open) => ipcRenderer.invoke('set-open-at-login', open),
+
+  /** Optional deviceName; falls back to saved or first physical printer */
+  testPrint: (deviceName) => ipcRenderer.invoke('test-print', deviceName),
 })

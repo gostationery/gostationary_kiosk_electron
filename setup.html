@@ -11,9 +11,10 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #f0f4f8;
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: center;
       min-height: 100vh;
+      padding: 24px 12px 32px;
       color: #1a202c;
     }
 
@@ -21,14 +22,16 @@
       background: #ffffff;
       border-radius: 16px;
       box-shadow: 0 4px 32px rgba(0,0,0,0.12);
-      padding: 48px 40px 40px;
-      width: 420px;
-      max-width: 92vw;
+      padding: 36px 32px 32px;
+      width: 100%;
+      max-width: 520px;
+      max-height: calc(100vh - 48px);
+      overflow-y: auto;
     }
 
     .logo {
       text-align: center;
-      margin-bottom: 28px;
+      margin-bottom: 24px;
     }
     .logo svg { width: 52px; height: 52px; }
     .logo h1 {
@@ -43,6 +46,17 @@
       margin-top: 4px;
     }
 
+    .section-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #718096;
+      margin-bottom: 10px;
+      margin-top: 22px;
+    }
+    .section-title:first-of-type { margin-top: 0; }
+
     label {
       display: block;
       font-size: 13px;
@@ -51,7 +65,7 @@
       margin-bottom: 6px;
     }
 
-    input {
+    input[type="text"] {
       width: 100%;
       padding: 10px 14px;
       border: 1.5px solid #e2e8f0;
@@ -61,10 +75,22 @@
       transition: border-color 0.15s;
       background: #f7fafc;
     }
-    input:focus { border-color: #3182ce; background: #fff; }
-    input::placeholder { color: #a0aec0; }
+    input[type="text"]:focus { border-color: #3182ce; background: #fff; }
+    input[type="text"]::placeholder { color: #a0aec0; }
 
-    .field { margin-bottom: 20px; }
+    select {
+      width: 100%;
+      padding: 10px 14px;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      outline: none;
+      background: #f7fafc;
+      cursor: pointer;
+    }
+    select:focus { border-color: #3182ce; background: #fff; }
+
+    .field { margin-bottom: 16px; }
 
     .hint {
       font-size: 11.5px;
@@ -72,21 +98,61 @@
       margin-top: 5px;
     }
 
+    .row-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+
     button {
+      padding: 12px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, opacity 0.15s;
+    }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+    .btn-primary {
       width: 100%;
       padding: 13px;
       background: #2b6cb0;
       color: #fff;
-      border: none;
-      border-radius: 8px;
-      font-size: 15px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.15s;
-      margin-top: 4px;
+      margin-top: 8px;
     }
-    button:hover { background: #2c5282; }
-    button:disabled { background: #bee3f8; cursor: not-allowed; }
+    .btn-primary:hover:not(:disabled) { background: #2c5282; }
+
+    .btn-secondary {
+      background: #edf2f7;
+      color: #2d3748;
+      flex: 1;
+      min-width: 120px;
+    }
+    .btn-secondary:hover:not(:disabled) { background: #e2e8f0; }
+
+    .btn-outline {
+      background: #fff;
+      color: #2b6cb0;
+      border: 1.5px solid #bee3f8;
+    }
+    .btn-outline:hover:not(:disabled) { background: #ebf8ff; }
+
+    .check-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 14px 16px;
+      background: #f7fafc;
+      border-radius: 10px;
+      border: 1px solid #e2e8f0;
+    }
+    .check-row input { margin-top: 3px; width: 18px; height: 18px; cursor: pointer; }
+    .check-row div { flex: 1; }
+    .check-row strong { display: block; font-size: 14px; margin-bottom: 4px; color: #2d3748; }
+    .check-row span { font-size: 12px; color: #718096; line-height: 1.45; }
 
     .error {
       font-size: 13px;
@@ -96,26 +162,36 @@
       min-height: 20px;
     }
 
+    .ok-msg {
+      font-size: 13px;
+      color: #276749;
+      margin-top: 8px;
+      text-align: center;
+      min-height: 20px;
+    }
+
     .shortcut-hint {
       text-align: center;
       font-size: 11px;
       color: #cbd5e0;
-      margin-top: 24px;
+      margin-top: 20px;
+      line-height: 1.5;
     }
   </style>
 </head>
 <body>
   <div class="card">
     <div class="logo">
-      <!-- Zap icon -->
       <svg viewBox="0 0 24 24" fill="none" stroke="#2b6cb0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
       </svg>
       <h1>GoStationary Kiosk</h1>
-      <p>Enter your kiosk credentials to get started</p>
+      <p>Configure this machine, receipt printer, and startup behaviour</p>
     </div>
 
     <form id="setup-form">
+      <p class="section-title">Kiosk credentials</p>
+
       <div class="field">
         <label for="domain">Organisation Domain</label>
         <input
@@ -142,23 +218,159 @@
         <p class="hint">Found on the sticker on your kiosk machine.</p>
       </div>
 
-      <button type="submit" id="submit-btn">Launch Kiosk</button>
+      <p class="section-title">Receipt printer</p>
+
+      <div class="field">
+        <label for="printer">Printer for silent receipts</label>
+        <select id="printer" aria-label="Select printer">
+          <option value="">Loading printers…</option>
+        </select>
+        <p class="hint">Choose the thermal or receipt printer. “Automatic” picks the first non-PDF printer.</p>
+        <div class="row-actions">
+          <button type="button" class="btn-secondary" id="refresh-printers">Refresh list</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Test print</label>
+        <p class="hint" style="margin-bottom: 8px;">Sends a short test page to the printer selected above (or automatic).</p>
+        <div class="row-actions">
+          <button type="button" class="btn-outline" id="test-print">Run test print</button>
+        </div>
+        <p class="ok-msg" id="print-status" aria-live="polite"></p>
+      </div>
+
+      <p class="section-title">Startup</p>
+
+      <div class="field">
+        <label class="check-row" style="cursor: pointer;">
+          <input type="checkbox" id="open-at-login" />
+          <div>
+            <strong>Open this app when the user logs in</strong>
+            <span>Uses your operating system’s login items (Windows, macOS, and supported Linux desktops). You can turn this off anytime here.</span>
+          </div>
+        </label>
+      </div>
+
+      <button type="submit" class="btn-primary" id="submit-btn">Launch Kiosk</button>
       <p class="error" id="error-msg"></p>
     </form>
 
     <p class="shortcut-hint">
-      Press <strong>Ctrl+Shift+L</strong> (or <strong>⌘+Shift+L</strong> on Mac) at any time to return to this screen.
+      Press <strong>Ctrl+Shift+L</strong> (or <strong>⌘+Shift+L</strong> on Mac) to return here from the kiosk.<br />
+      Printer choice and “open at login” are kept; only the domain and serial above are cleared by that shortcut.
     </p>
   </div>
 
   <script>
-    const form     = document.getElementById('setup-form')
+    const DEFAULT_VALUE = ''
+    const form = document.getElementById('setup-form')
     const errorMsg = document.getElementById('error-msg')
-    const btn      = document.getElementById('submit-btn')
+    const printStatus = document.getElementById('print-status')
+    const btn = document.getElementById('submit-btn')
+    const printerSelect = document.getElementById('printer')
+    const openAtLoginEl = document.getElementById('open-at-login')
+
+    function printerLabel(p) {
+      const d = (p.displayName || '').trim()
+      const n = (p.name || '').trim()
+      if (d && d !== n) return d + ' — ' + n
+      return n || d || 'Printer'
+    }
+
+    async function refreshPrinters() {
+      printerSelect.disabled = true
+      try {
+        const api = window.electronAPI
+        if (!api?.getPrinters) {
+          printerSelect.innerHTML = '<option value="">Printer APIs unavailable</option>'
+          return
+        }
+        const printers = await api.getPrinters()
+        const prefs = await api.getKioskPrefs()
+        const saved = prefs.printerName || ''
+
+        printerSelect.innerHTML = ''
+        const optAuto = document.createElement('option')
+        optAuto.value = DEFAULT_VALUE
+        optAuto.textContent = 'Automatic (first suitable receipt printer)'
+        printerSelect.appendChild(optAuto)
+
+        for (const p of printers) {
+          const o = document.createElement('option')
+          o.value = p.name
+          o.textContent = printerLabel(p)
+          printerSelect.appendChild(o)
+        }
+
+        const match = saved && printers.some((x) => x.name === saved)
+        printerSelect.value = match ? saved : DEFAULT_VALUE
+      } catch (e) {
+        printerSelect.innerHTML = '<option value="">Could not load printers</option>'
+      }
+      printerSelect.disabled = false
+    }
+
+    document.getElementById('refresh-printers').addEventListener('click', () => {
+      void refreshPrinters()
+    })
+
+    printerSelect.addEventListener('change', async () => {
+      const api = window.electronAPI
+      if (!api?.setPrinter) return
+      printStatus.textContent = ''
+      try {
+        await api.setPrinter(printerSelect.value || '')
+      } catch (_) {}
+    })
+
+    openAtLoginEl.addEventListener('change', async () => {
+      const api = window.electronAPI
+      if (!api?.setOpenAtLogin) return
+      try {
+        await api.setOpenAtLogin(openAtLoginEl.checked)
+      } catch (_) {}
+    })
+
+    document.getElementById('test-print').addEventListener('click', async () => {
+      const api = window.electronAPI
+      printStatus.textContent = ''
+      if (!api?.testPrint) {
+        printStatus.textContent = 'Test print is not available.'
+        printStatus.style.color = '#c53030'
+        return
+      }
+      const name = printerSelect.value || undefined
+      try {
+        const res = await api.testPrint(name)
+        if (res?.success) {
+          printStatus.style.color = '#276749'
+          printStatus.textContent = 'Test print job sent.'
+        } else {
+          printStatus.style.color = '#c53030'
+          printStatus.textContent = 'Print failed: ' + (res?.errorType || 'unknown')
+        }
+      } catch (err) {
+        printStatus.style.color = '#c53030'
+        printStatus.textContent = err?.message || 'Test print failed.'
+      }
+    })
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      const api = window.electronAPI
+      if (api?.getKioskPrefs) {
+        try {
+          const prefs = await api.getKioskPrefs()
+          openAtLoginEl.checked = Boolean(prefs.openAtLogin)
+        } catch (_) {}
+      }
+      await refreshPrinters()
+    })
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault()
       errorMsg.textContent = ''
+      printStatus.textContent = ''
 
       const domain = document.getElementById('domain').value.trim()
       const serial = document.getElementById('serial').value.trim()
@@ -172,8 +384,12 @@
       btn.textContent = 'Connecting…'
 
       try {
-        await window.electronAPI.saveConfig(domain, serial)
-        // Main process will navigate the window – nothing more needed here
+        await window.electronAPI.saveConfig({
+          domain,
+          serial,
+          printerName: printerSelect.value || '',
+          openAtLogin: openAtLoginEl.checked,
+        })
       } catch (err) {
         errorMsg.textContent = err?.message || 'Something went wrong. Please try again.'
         btn.disabled = false

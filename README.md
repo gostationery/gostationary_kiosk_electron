@@ -77,4 +77,3 @@ A 1024×1024 PNG → use [electron-icon-maker](https://github.com/jaretburkett/e
 1. Push this folder to a GitHub repo (e.g. `gostationery/gostationary_kiosk_electron`).
 2. Add the `.github/workflows/release.yml` CI workflow to auto-build on tag push.
 3. Update the download links on the GoStationary landing page to point to the release assets.
->>>>>>> b3b82af (Initial commit)
