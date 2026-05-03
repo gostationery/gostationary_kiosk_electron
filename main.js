@@ -134,18 +134,53 @@ function receiptPrintOptions(deviceName, heightMicrons) {
   }
 }
 
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/** Sample dine-in token slip — same root id as kiosk receipts so height measurement matches silent-print. */
 function testPrintHtml() {
-  const when = new Date().toLocaleString()
+  const dateStr = new Date().toLocaleDateString()
+  const timeStr = new Date().toLocaleTimeString()
+  const when = escapeHtml(new Date().toLocaleString())
+  const sampleToken = '42'
+  const sampleName = 'Test token item'
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>
-    body { font-family: ui-monospace, monospace; padding: 12px; width: 72mm; margin: 0; color: #000; background: #fff; }
-    h1 { font-size: 14px; margin: 0 0 8px; }
-    p { font-size: 12px; margin: 6px 0; line-height: 1.4; }
-    .rule { border-top: 2px dashed #000; margin: 10px 0; }
+    html, body { margin: 0; padding: 0; color: #000; background: #fff; }
+    body { font-family: 'Courier New', Courier, monospace; font-size: 14px; font-weight: 600; }
+    #kiosk-receipt-root {
+      box-sizing: border-box;
+      width: 72mm;
+      max-width: 72mm;
+      margin: 0;
+      padding: 3mm 2mm;
+    }
   </style></head><body>
-    <h1>GoStationary — test print</h1>
-    <p>This page confirms the kiosk can reach the selected printer when printing silently.</p>
-    <div class="rule"></div>
-    <p>${when}</p>
+    <div id="kiosk-receipt-root">
+      <div style="text-align:center;font-size:11px;font-weight:700;margin-bottom:4px;">TEST PRINT — not a sale</div>
+      <div style="text-align:center;font-size:18px;font-weight:900;letter-spacing:0.06em;text-transform:uppercase;">GoStationary</div>
+      <div style="border-top:2px solid #000;margin:6px 0;"></div>
+      <div style="text-align:center;font-size:14px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">★ TOKEN ★</div>
+      <div style="text-align:center;font-size:38px;font-weight:800;margin-top:4px;">${escapeHtml(sampleName)}</div>
+      <div style="border-top:1px dashed #000;margin:6px 0;"></div>
+      <div style="text-align:center;font-size:13px;font-weight:700;margin-bottom:2px;">YOUR TOKEN NUMBER</div>
+      <div style="text-align:center;font-size:48px;font-weight:900;line-height:1;letter-spacing:-1px;margin:6px 0;">${escapeHtml(sampleToken)}</div>
+      <div style="text-align:center;font-size:22px;font-weight:900;">₹1.00</div>
+      <div style="border-top:1px dashed #000;margin:8px 0;"></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;"><span>Date</span><span>${escapeHtml(dateStr)}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;"><span>Time</span><span>${escapeHtml(timeStr)}</span></div>
+      <div style="border-top:1px dashed #000;margin:6px 0;"></div>
+      <div style="text-align:center;font-size:12px;font-weight:700;letter-spacing:0.06em;">NON-REFUNDABLE • TOKEN</div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-top:4px;"><span>Mode: Kiosk</span><span>Cashier: Kiosk</span></div>
+      <div style="border-top:1px dashed #000;margin:6px 0;"></div>
+      <div style="text-align:center;font-size:13px;font-weight:700;">Thank you!</div>
+      <div style="text-align:center;font-size:13px;letter-spacing:0.3em;margin-top:4px;">★ ★ ★</div>
+      <div style="border-top:2px dashed #000;margin:10px 0 0;padding-top:6px;font-size:11px;text-align:center;">Printed ${when}</div>
+    </div>
   </body></html>`
 }
 
