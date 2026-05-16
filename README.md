@@ -47,10 +47,16 @@ Builds are placed in the `dist/` folder.
 
 ## Silent Printing – How It Works
 
-1. The kiosk React page calls `window.electronAPI.print()` on order success.
-2. The `preload.js` forwards this to the main process via IPC.
-3. `main.js` calls `webContents.getPrintersAsync()`, finds the **first non-PDF physical printer**, and calls `webContents.print({ silent: true, deviceName: ... })`.
-4. No dialog appears – the bill goes straight to the printer.
+1. The kiosk React page calls `window.electronAPI.print()` on order success (single receipt / invoice).
+2. For **multi-token orders** (token-per-person layout), the webview uses verified sequential printing:
+   - `beginTokenPrintJob({ jobId, slips })` — register expected slip ids
+   - `printSlip({ jobId, slipId, index, total })` — print one slip; resolves when the printer callback completes
+   - `getTokenPrintStatus(jobId)` — returns missing slip ids for reprint
+3. The `preload.js` forwards these to the main process via IPC.
+4. `main.js` serializes all print jobs in a queue, verifies `#kiosk-receipt-root[data-slip-id]` matches before printing, and calls `webContents.print({ silent: true, deviceName: ... })`.
+5. No dialog appears – the bill goes straight to the printer.
+
+Persistent print failures are logged to the backend (`POST .../print-events`) and shown on the kiosk success screen.
 
 ### Requirements
 - At least **one physical printer** must be installed and set as the OS default, or the app will fall back to whatever `deviceName: ''` resolves to.

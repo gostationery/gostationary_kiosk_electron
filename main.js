@@ -6,7 +6,8 @@
  *  2. After setup → load https://gostationary-kiosk-frontend.vercel.app/{domain}/{serial}
  *  3. Stores config in userData/kiosk-config.json (optional: printerName, openAtLogin)
  *  4. Ctrl/Cmd+Shift+L → clears domain/serial, returns to setup (keeps printer + boot prefs)
- *  5. IPC 'silent-print' → prints using saved printer or first physical printer
+ *  5. IPC print-slip / silent-print → silent receipt print (serialized queue)
+ *  6. Token print jobs → manifest + per-slip ack for multi-token orders
  */
 
 const {
@@ -184,6 +185,134 @@ function testPrintHtml() {
   </body></html>`
 }
 
+// ── Token print jobs + serialized print queue ───────────────────────────────
+const TOKEN_PRINT_JOB_TTL_MS = 30 * 60 * 1000
+/** @type {Map<string, { expected: Set<string>, printed: Set<string>, createdAt: number }>} */
+const tokenPrintJobs = new Map()
+let printChain = Promise.resolve()
+
+function pruneTokenPrintJobs() {
+  const now = Date.now()
+  for (const [jobId, job] of tokenPrintJobs) {
+    if (now - job.createdAt > TOKEN_PRINT_JOB_TTL_MS) {
+      tokenPrintJobs.delete(jobId)
+    }
+  }
+}
+
+function enqueuePrint(task) {
+  const run = printChain.then(() => task())
+  printChain = run.catch(() => {})
+  return run
+}
+
+function escapeJsString(s) {
+  return String(s)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')
+}
+
+/** Wait until #kiosk-receipt-root[data-slip-id] matches expected (token jobs only). */
+async function waitForSlipDom(webContents, slipId, timeoutMs = 5000) {
+  const expected = escapeJsString(slipId)
+  const script = `(() => new Promise((resolve) => {
+    const deadline = Date.now() + ${timeoutMs}
+    const tick = () => {
+      const el = document.getElementById('kiosk-receipt-root')
+      if (el && el.dataset.slipId === '${expected}') {
+        resolve(true)
+        return
+      }
+      if (Date.now() >= deadline) {
+        resolve(false)
+        return
+      }
+      requestAnimationFrame(tick)
+    }
+    tick()
+  }))()`
+  try {
+    return Boolean(await webContents.executeJavaScript(script))
+  } catch {
+    return false
+  }
+}
+
+async function resolvePrinterDeviceName() {
+  const cfg = loadConfig()
+  const printers = await mainWindow.webContents.getPrintersAsync()
+  let deviceName = cfg?.printerName || ''
+  if (deviceName && !printers.some((p) => p.name === deviceName)) {
+    deviceName = ''
+  }
+  if (!deviceName) {
+    deviceName = pickPhysicalPrinter(printers)?.name || ''
+  }
+  return deviceName
+}
+
+function printWebContents(webContents, deviceName) {
+  return new Promise((resolve) => {
+    measureContentHeightMicrons(webContents)
+      .then((heightMicrons) => {
+        webContents.print(
+          receiptPrintOptions(deviceName, heightMicrons),
+          (success, errorType) => {
+            resolve({
+              success: Boolean(success),
+              errorType: success ? undefined : errorType,
+            })
+          },
+        )
+      })
+      .catch((err) => {
+        console.error('[GoStationary Kiosk] measure/print error:', err)
+        resolve({ success: false, errorType: String(err?.message || err) })
+      })
+  })
+}
+
+/**
+ * Print current main-window receipt. Optional jobId+slipId for verified token slips.
+ * @param {{ jobId?: string, slipId?: string, index?: number, total?: number, tokenLabel?: string }} meta
+ */
+async function printReceiptSlip(meta = {}) {
+  if (!mainWindow?.webContents) {
+    return { success: false, errorType: 'no-window', slipId: meta.slipId }
+  }
+
+  const jobId = meta.jobId ? String(meta.jobId) : ''
+  const slipId = meta.slipId ? String(meta.slipId) : ''
+
+  if (jobId && slipId) {
+    pruneTokenPrintJobs()
+    const job = tokenPrintJobs.get(jobId)
+    if (!job || !job.expected.has(slipId)) {
+      console.error('[GoStationary Kiosk] print-slip: slip not in job manifest', jobId, slipId)
+      return { success: false, errorType: 'slip-not-in-manifest', slipId }
+    }
+    const domOk = await waitForSlipDom(mainWindow.webContents, slipId)
+    if (!domOk) {
+      console.error('[GoStationary Kiosk] print-slip: DOM slip mismatch', slipId)
+      return { success: false, errorType: 'dom-slip-mismatch', slipId }
+    }
+  }
+
+  const deviceName = await resolvePrinterDeviceName()
+  const result = await printWebContents(mainWindow.webContents, deviceName)
+
+  if (result.success && jobId && slipId) {
+    const job = tokenPrintJobs.get(jobId)
+    if (job) job.printed.add(slipId)
+  } else if (!result.success) {
+    console.error('[GoStationary Kiosk] Print failed:', result.errorType, slipId || '')
+  }
+
+  return { ...result, slipId: slipId || undefined }
+}
+
 // ── Window ───────────────────────────────────────────────────────────────────
 let mainWindow
 
@@ -315,26 +444,45 @@ ipcMain.handle('test-print', async (_event, deviceNameArg) => {
   })
 })
 
-// ── IPC: Silent print (order receipt) ────────────────────────────────────────
-ipcMain.handle('silent-print', async () => {
-  try {
-    const cfg = loadConfig()
-    const printers = await mainWindow.webContents.getPrintersAsync()
-    let deviceName = cfg?.printerName || ''
-    if (deviceName && !printers.some((p) => p.name === deviceName)) {
-      deviceName = ''
-    }
-    if (!deviceName) {
-      deviceName = pickPhysicalPrinter(printers)?.name || ''
-    }
+// ── IPC: Token print job + verified slip print ───────────────────────────────
+ipcMain.handle('begin-token-print-job', (_event, payload) => {
+  const jobId = payload?.jobId ? String(payload.jobId) : ''
+  const slips = Array.isArray(payload?.slips) ? payload.slips : []
+  if (!jobId || slips.length === 0) {
+    throw new Error('jobId and slips are required')
+  }
+  pruneTokenPrintJobs()
+  const expected = new Set()
+  for (const s of slips) {
+    if (s?.slipId) expected.add(String(s.slipId))
+  }
+  tokenPrintJobs.set(jobId, {
+    expected,
+    printed: new Set(),
+    createdAt: Date.now(),
+  })
+  return { jobId, expected: expected.size }
+})
 
-    const heightMicrons = await measureContentHeightMicrons(mainWindow.webContents)
-    mainWindow.webContents.print(receiptPrintOptions(deviceName, heightMicrons), (success, errorType) => {
-      if (!success) {
-        console.error('[GoStationary Kiosk] Print failed:', errorType)
-      }
-    })
-  } catch (err) {
-    console.error('[GoStationary Kiosk] silent-print error:', err)
+ipcMain.handle('get-token-print-status', (_event, jobIdArg) => {
+  const jobId = jobIdArg ? String(jobIdArg) : ''
+  const job = tokenPrintJobs.get(jobId)
+  if (!job) {
+    return { expected: 0, printed: 0, missing: [] }
+  }
+  const missing = [...job.expected].filter((id) => !job.printed.has(id))
+  return {
+    expected: job.expected.size,
+    printed: job.printed.size,
+    missing,
   }
 })
+
+ipcMain.handle('print-slip', (_event, meta) =>
+  enqueuePrint(() => printReceiptSlip(meta || {})),
+)
+
+/** Legacy single-shot print (invoice / one receipt). */
+ipcMain.handle('silent-print', () =>
+  enqueuePrint(() => printReceiptSlip({})),
+)

@@ -6,7 +6,17 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  /** Legacy single receipt print (invoice / one job). */
   print: () => ipcRenderer.invoke('silent-print'),
+
+  /** Register expected token slips before sequential printing. */
+  beginTokenPrintJob: (payload) => ipcRenderer.invoke('begin-token-print-job', payload),
+
+  /** Print one slip; returns when the printer callback completes. */
+  printSlip: (meta) => ipcRenderer.invoke('print-slip', meta),
+
+  /** Compare manifest vs successfully printed slips. */
+  getTokenPrintStatus: (jobId) => ipcRenderer.invoke('get-token-print-status', jobId),
 
   /** Full setup payload: domain, serial, optional printerName, openAtLogin */
   saveConfig: (cfg) => ipcRenderer.invoke('save-config', cfg),
