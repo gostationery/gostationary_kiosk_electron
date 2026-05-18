@@ -3,7 +3,7 @@
  *
  * Flow:
  *  1. On first launch → show setup.html (enter org_domain + machine_serial)
- *  2. After setup → load https://gostationary-kiosk-frontend.vercel.app/{domain}/{serial}
+ *  2. After setup → load bundled kiosk UI at http://127.0.0.1:{port}/{domain}/{serial}?apiBase={backend}
  *  3. Stores config in userData/kiosk-config.json (optional: printerName, openAtLogin)
  *  4. Ctrl/Cmd+Shift+L → clears domain/serial, returns to setup (keeps printer + boot prefs)
  *  5. IPC print-slip / silent-print → silent receipt print (serialized queue)
@@ -18,6 +18,11 @@ const {
 } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const { createKioskStaticServer, KIOSK_UI_DIR } = require('./kiosk-static-server')
+const { initAutoUpdater } = require('./auto-updater')
+
+const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000'
+const KIOSK_STATIC_PORT_PREFERRED = 47831
 
 // ── Config helpers ──────────────────────────────────────────────────────────
 const CONFIG_PATH = path.join(app.getPath('userData'), 'kiosk-config.json')
@@ -48,12 +53,43 @@ function clearMachinePairing() {
   const next = {}
   if (prev?.printerName) next.printerName = prev.printerName
   if (typeof prev?.openAtLogin === 'boolean') next.openAtLogin = prev.openAtLogin
+  if (prev?.backendUrl) next.backendUrl = prev.backendUrl
   clearConfigFile()
   if (Object.keys(next).length) saveConfig(next)
 }
 
+/** @type {{ port: number, host: string, origin: string } | null} */
+let kioskStaticServerInfo = null
+
+function normalizeBackendUrl(raw) {
+  const s = String(raw ?? '').trim()
+  if (!s) return DEFAULT_BACKEND_URL
+  try {
+    const u = new URL(s)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+      throw new Error('Backend URL must start with http:// or https://')
+    }
+    return u.origin
+  } catch (e) {
+    if (e instanceof TypeError) throw new Error('Invalid backend URL')
+    throw e
+  }
+}
+
+function kioskOrigin() {
+  if (!kioskStaticServerInfo?.origin) {
+    throw new Error('Kiosk UI server is not running')
+  }
+  return kioskStaticServerInfo.origin
+}
+
 function kioskURL(cfg) {
-  return `https://www.gostationary.in//${cfg.domain}/${cfg.serial}`
+  const domain = encodeURIComponent(String(cfg.domain).trim())
+  const serial = encodeURIComponent(String(cfg.serial).trim())
+  const apiBase = encodeURIComponent(
+    normalizeBackendUrl(cfg.backendUrl || DEFAULT_BACKEND_URL),
+  )
+  return `${kioskOrigin()}/${domain}/${serial}?apiBase=${apiBase}&electron=1`
 }
 
 function applyOpenAtLoginFromConfig(cfg) {
@@ -313,8 +349,26 @@ async function printReceiptSlip(meta = {}) {
   return { ...result, slipId: slipId || undefined }
 }
 
+// ── Kiosk activity (suppress idle hard-refresh while in use) ─────────────────
+let lastKioskActivityAt = Date.now()
+
 // ── Window ───────────────────────────────────────────────────────────────────
 let mainWindow
+/** @type {ReturnType<createKioskStaticServer> | null} */
+let kioskStaticServer = null
+
+async function startKioskStaticServer() {
+  if (kioskStaticServerInfo) return kioskStaticServerInfo
+  kioskStaticServer = createKioskStaticServer(KIOSK_UI_DIR)
+  kioskStaticServerInfo = await kioskStaticServer.listen(KIOSK_STATIC_PORT_PREFERRED)
+  console.log(
+    '[GoStationary Kiosk] UI server:',
+    kioskStaticServerInfo.origin,
+    '→',
+    KIOSK_UI_DIR,
+  )
+  return kioskStaticServerInfo
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -340,9 +394,17 @@ function createWindow() {
 }
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   applyOpenAtLoginFromConfig(loadConfig())
+  try {
+    await startKioskStaticServer()
+  } catch (err) {
+    console.error('[GoStationary Kiosk] Failed to start UI server:', err)
+    app.quit()
+    return
+  }
   createWindow()
+  initAutoUpdater()
 
   globalShortcut.register('CommandOrControl+Shift+L', () => {
     clearMachinePairing()
@@ -360,6 +422,9 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  if (kioskStaticServer?.close) {
+    void kioskStaticServer.close()
+  }
 })
 
 // ── IPC: Setup / prefs ──────────────────────────────────────────────────────
@@ -372,6 +437,7 @@ ipcMain.handle('save-config', (_event, cfg) => {
     ...prev,
     domain: String(cfg.domain).trim(),
     serial: String(cfg.serial).trim(),
+    backendUrl: normalizeBackendUrl(cfg.backendUrl ?? prev.backendUrl),
   }
   if (cfg.printerName !== undefined) {
     merged.printerName = cfg.printerName ? String(cfg.printerName) : ''
@@ -394,7 +460,13 @@ ipcMain.handle('get-kiosk-prefs', () => {
   return {
     printerName: cfg?.printerName || '',
     openAtLogin: Boolean(cfg?.openAtLogin),
+    backendUrl: normalizeBackendUrl(cfg?.backendUrl),
   }
+})
+
+ipcMain.handle('notify-kiosk-activity', () => {
+  lastKioskActivityAt = Date.now()
+  return { ok: true, at: lastKioskActivityAt }
 })
 
 ipcMain.handle('set-printer', (_event, printerName) => {

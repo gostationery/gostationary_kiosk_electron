@@ -218,6 +218,20 @@
         <p class="hint">Found on the sticker on your kiosk machine.</p>
       </div>
 
+      <p class="section-title">Backend server</p>
+
+      <div class="field">
+        <label for="backend-url">API base URL</label>
+        <input
+          id="backend-url"
+          type="text"
+          placeholder="http://127.0.0.1:8000"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="hint">GoStationary kiosk backend (local or LAN). The kiosk UI talks to this server directly.</p>
+      </div>
+
       <p class="section-title">Receipt printer</p>
 
       <div class="field">
@@ -358,11 +372,16 @@
 
     document.addEventListener('DOMContentLoaded', async () => {
       const api = window.electronAPI
+      const backendEl = document.getElementById('backend-url')
       if (api?.getKioskPrefs) {
         try {
           const prefs = await api.getKioskPrefs()
           openAtLoginEl.checked = Boolean(prefs.openAtLogin)
+          if (backendEl && prefs.backendUrl) backendEl.value = prefs.backendUrl
         } catch (_) {}
+      }
+      if (backendEl && !backendEl.value) {
+        backendEl.value = 'http://127.0.0.1:8000'
       }
       await refreshPrinters()
     })
@@ -374,9 +393,14 @@
 
       const domain = document.getElementById('domain').value.trim()
       const serial = document.getElementById('serial').value.trim()
+      const backendUrl = document.getElementById('backend-url').value.trim()
 
       if (!domain || !serial) {
-        errorMsg.textContent = 'Both fields are required.'
+        errorMsg.textContent = 'Domain and serial are required.'
+        return
+      }
+      if (!backendUrl) {
+        errorMsg.textContent = 'Backend API URL is required.'
         return
       }
 
@@ -387,6 +411,7 @@
         await window.electronAPI.saveConfig({
           domain,
           serial,
+          backendUrl,
           printerName: printerSelect.value || '',
           openAtLogin: openAtLoginEl.checked,
         })

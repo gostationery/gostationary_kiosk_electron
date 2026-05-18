@@ -1,6 +1,6 @@
 {
   "name": "gostationary-kiosk",
-  "productName": "GoStationary Kiosk",
+  "productName": "gostationary-kiosk",
   "version": "1.0.0",
   "description": "GoStationary Kiosk Desktop App – wraps the kiosk web UI with silent printing",
   "homepage": "https://gostationary.com",
@@ -10,45 +10,117 @@
   },
   "main": "main.js",
   "scripts": {
+    "build:kiosk-ui": "cd ../gostationary_kiosk_frontend && pnpm run build:electron",
+    "sync:kiosk-ui": "node scripts/sync-kiosk-ui.js",
+    "prepare:kiosk": "npm run build:kiosk-ui && npm run sync:kiosk-ui",
+    "prestart": "npm run sync:kiosk-ui",
     "start": "electron .",
     "build:mac": "electron-builder --mac",
     "build:win": "electron-builder --win",
-    "build:linux": "electron-builder --linux",
+    "build:linux": "electron-builder --linux deb rpm",
+    "build:linux:deb": "electron-builder --linux deb",
+    "build:linux:rpm": "electron-builder --linux rpm",
+    "publish:linux": "electron-builder --linux deb rpm --publish always",
     "build:all": "electron-builder -mwl"
   },
   "build": {
     "appId": "com.gostationary.kiosk",
-    "productName": "GoStationary Kiosk",
+    "productName": "gostationary-kiosk",
     "copyright": "Copyright © 2026 GoStationary",
+    "electronUpdaterCompatibility": ">=2.16",
     "directories": {
       "output": "dist"
     },
     "files": [
       "main.js",
+      "auto-updater.js",
       "preload.js",
       "setup.html",
+      "kiosk-static-server.js",
+      "kiosk-ui/**",
       "assets/**"
     ],
     "mac": {
       "category": "public.app-category.business",
       "icon": "assets/icon.icns",
       "target": [
-        { "target": "dmg", "arch": ["universal"] },
-        { "target": "zip", "arch": ["universal"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
       ]
     },
     "win": {
       "icon": "assets/icon.ico",
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "linux": {
       "icon": "assets/icon.png",
       "category": "Office",
       "maintainer": "GoStationary <support@gostationary.com>",
+      "executableName": "gostationary-kiosk",
+      "synopsis": "GoStationary fullscreen kiosk with silent receipt printing",
+      "description": "GoStationary Kiosk desktop app for Ubuntu, Fedora, and Raspberry Pi (64-bit).",
       "target": [
-        { "target": "AppImage", "arch": ["x64"] }
+        {
+          "target": "deb",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "rpm",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "desktop": {
+        "entry": {
+          "Name": "GoStationary Kiosk",
+          "StartupNotify": "false",
+          "Terminal": "false"
+        }
+      }
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils"
+      ],
+      "recommends": [
+        "libappindicator3-1"
+      ]
+    },
+    "rpm": {
+      "depends": [
+        "gtk3",
+        "libnotify",
+        "nss",
+        "libXScrnSaver",
+        "libXtst",
+        "xdg-utils"
       ]
     },
     "nsis": {
@@ -56,10 +128,19 @@
       "perMachine": false,
       "createDesktopShortcut": true
     },
-    "publish": null
+    "publish": {
+      "provider": "github",
+      "owner": "gostationery",
+      "repo": "gostationary_kiosk_electron",
+      "releaseType": "release"
+    }
+  },
+  "dependencies": {
+    "electron-log": "^5.4.4",
+    "electron-updater": "^6.8.3"
   },
   "devDependencies": {
     "electron": "^33.0.0",
-    "electron-builder": "^25.0.0"
+    "electron-builder": "^26.8.1"
   }
 }

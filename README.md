@@ -13,8 +13,16 @@ npm install
 npm start
 ```
 
-On first launch you'll see the **Setup screen** → enter your **Org Domain** and **Machine Serial Number** → click **Launch Kiosk**.  
-The app stores those credentials locally and auto-loads the kiosk on every subsequent launch.
+On first launch you'll see the **Setup screen** → enter your **Org Domain**, **Machine Serial Number**, and **Backend API URL** (default `http://127.0.0.1:8000`) → click **Launch Kiosk**.  
+The app serves the **same kiosk UI** as the web app from a local bundle and talks to your backend directly (no hosted frontend). Credentials are stored locally and the kiosk auto-loads on every subsequent launch.
+
+Before first run (or after frontend changes), bundle the UI into the app:
+
+```bash
+cd gostationary_kiosk_electron
+npm run prepare:kiosk   # builds frontend + copies dist → kiosk-ui/
+npm start
+```
 
 ---
 
@@ -38,7 +46,7 @@ npm install
 |---|---|---|
 | macOS | `npm run build:mac` | `dist/GoStationary Kiosk-*.dmg` |
 | Windows | `npm run build:win` | `dist/GoStationary Kiosk Setup *.exe` |
-| Linux | `npm run build:linux` | `dist/GoStationary Kiosk-*.AppImage` |
+| Linux | `npm run build:linux` | `dist/*.deb` and `dist/*.rpm` (x64 + arm64) |
 | All three | `npm run build:all` | All of the above |
 
 Builds are placed in the `dist/` folder.
@@ -78,8 +86,16 @@ A 1024×1024 PNG → use [electron-icon-maker](https://github.com/jaretburkett/e
 
 ---
 
+## Auto-update (GitHub Releases)
+
+Installed `.deb` / `.rpm` builds check GitHub for new versions and download updates **silently** (no AppImage). See [packaging/AUTO_UPDATE.md](packaging/AUTO_UPDATE.md) for Pi 3/4, Ubuntu, Fedora, and publishing tags.
+
+1. Bump `version` in `package.json`, commit, tag `v1.0.1`, push the tag.
+2. GitHub Actions (`.github/workflows/release.yml`) builds and publishes installers + `latest-linux*.yml`.
+3. Kiosks pick up the update on the next check (about 30s after launch, then every 4 hours) and install on quit/restart.
+
 ## GitHub Releases (for public downloads)
 
-1. Push this folder to a GitHub repo (e.g. `gostationery/gostationary_kiosk_electron`).
-2. Add the `.github/workflows/release.yml` CI workflow to auto-build on tag push.
-3. Update the download links on the GoStationary landing page to point to the release assets.
+1. Repo: [gostationery/gostationary_kiosk_electron](https://github.com/gostationery/gostationary_kiosk_electron).
+2. Tag push triggers CI (`.github/workflows/release.yml`).
+3. Point landing-page Linux downloads at the `.deb` / `.rpm` assets for the user’s CPU (amd64 vs arm64).
