@@ -31,4 +31,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** Optional deviceName; falls back to saved or first physical printer */
   testPrint: (deviceName) => ipcRenderer.invoke('test-print', deviceName),
+
+  /** Kiosk UI: activity ping so idle hard-refresh does not interrupt checkout */
+  notifyKioskActivity: () => ipcRenderer.invoke('notify-kiosk-activity'),
 })
