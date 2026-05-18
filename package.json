@@ -1,9 +1,9 @@
 {
   "name": "gostationary-kiosk",
   "productName": "gostationary-kiosk",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "GoStationary Kiosk Desktop App – wraps the kiosk web UI with silent printing",
-  "homepage": "https://gostationary.com",
+  "homepage": "https://www.gostationary.in",
   "author": {
     "name": "GoStationary",
     "email": "support@gostationary.com"
