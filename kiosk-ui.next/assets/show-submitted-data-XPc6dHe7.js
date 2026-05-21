@@ -1,0 +1,1 @@
+import{t as o,j as t}from"./index-BMDCtN6w.js";function i(s,e="You submitted the following values:"){o.message(e,{description:t.jsx("pre",{className:"mt-2 w-full overflow-x-auto rounded-md bg-slate-950 p-4",children:t.jsx("code",{className:"text-white",children:JSON.stringify(s,null,2)})})})}export{i as s};

@@ -1,0 +1,1 @@
+import{j as e}from"./index-BMDCtN6w.js";function n({children:s}){return e.jsx("div",{className:"container grid h-svh max-w-none items-center justify-center",children:e.jsx("div",{className:"mx-auto flex w-full flex-col justify-center space-y-2 py-8 sm:w-[480px] sm:p-8",children:s})})}export{n as A};

@@ -1,0 +1,1 @@
+import{j as x,a as l}from"./index-BMDCtN6w.js";function m({fixed:t,className:n,fluid:o,...a}){return x.jsx("main",{"data-layout":t?"fixed":"auto",className:l("min-w-0 px-3 sm:px-4",t?"pt-1 pb-2":"pt-2 pb-6",t&&"flex grow flex-col overflow-hidden",!o&&"@7xl/content:mx-auto @7xl/content:w-full @7xl/content:max-w-7xl",n),...a})}export{m as M};

@@ -12,6 +12,7 @@
   "scripts": {
     "build:kiosk-ui": "cd ../gostationary_kiosk_frontend && pnpm run build:electron",
     "sync:kiosk-ui": "node scripts/sync-kiosk-ui.js",
+    "fix:kiosk-ui-perms": "chown -R \"$(id -un)\":\"$(id -gn)\" kiosk-ui 2>/dev/null || echo 'Run: sudo chown -R $USER:$USER kiosk-ui'",
     "prepare:kiosk": "npm run build:kiosk-ui && npm run sync:kiosk-ui",
     "prestart": "npm run sync:kiosk-ui",
     "start": "electron .",

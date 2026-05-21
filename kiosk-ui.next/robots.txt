@@ -1,0 +1,99 @@
+# robots.txt for Kupe AI - Voice AI Platform
+# Generated for optimal SEO and web crawler access
+
+# Allow all search engines to crawl the entire site
+User-agent: *
+Allow: /
+
+# Sitemap location
+Sitemap: https://kupe.in/sitemap.xml
+
+# Allow specific paths
+Allow: /agents
+Allow: /apps
+Allow: /files
+Allow: /settings
+Allow: /workflows
+Allow: /call-logs
+Allow: /outbound
+Allow: /phone-numbers
+Allow: /whatsapp
+Allow: /dashboard
+
+# Disallow admin and private paths (if any)
+Disallow: /api/
+Disallow: /admin/
+Disallow: /private/
+Disallow: /_authenticated/internal/
+
+# Crawl-delay for respectful crawling
+Crawl-delay: 1
+
+# Specific rules for major search engines
+User-agent: Googlebot
+Allow: /
+Crawl-delay: 0
+
+User-agent: Googlebot-Image
+Allow: /images/
+Allow: /sitafal_logo/
+
+User-agent: Bingbot
+Allow: /
+Crawl-delay: 1
+
+User-agent: Slurp
+Allow: /
+Crawl-delay: 1
+
+User-agent: DuckDuckBot
+Allow: /
+Crawl-delay: 1
+
+User-agent: Baiduspider
+Allow: /
+Crawl-delay: 2
+
+User-agent: YandexBot
+Allow: /
+Crawl-delay: 1
+
+User-agent: Sogou
+Allow: /
+Crawl-delay: 2
+
+User-agent: Exabot
+Allow: /
+Crawl-delay: 1
+
+User-agent: facebot
+Allow: /
+Crawl-delay: 1
+
+User-agent: ia_archiver
+Allow: /
+Crawl-delay: 1
+
+# Block bad bots
+User-agent: AhrefsBot
+Crawl-delay: 10
+
+User-agent: SemrushBot
+Crawl-delay: 10
+
+User-agent: DotBot
+Crawl-delay: 10
+
+# Allow all image crawlers
+User-agent: Googlebot-Image
+Allow: /
+
+User-agent: Bingbot-Image
+Allow: /
+
+# Allow all media crawlers
+User-agent: Googlebot-Video
+Allow: /
+
+# Host information
+Host: https://kupe.in

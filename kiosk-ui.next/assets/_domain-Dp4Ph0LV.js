@@ -1,0 +1,1 @@
+import{j as e}from"./index-BMDCtN6w.js";function n(){return e.jsx("div",{className:"flex h-screen items-center justify-center text-muted-foreground text-center px-4",children:e.jsxs("p",{children:["Kiosk URLs now use the pattern ",e.jsx("code",{className:"bg-muted px-1 rounded",children:"/<org_domain>/<machine_serial>"}),"."]})})}export{n as component};
