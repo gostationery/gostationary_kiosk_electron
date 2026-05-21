@@ -61,3 +61,14 @@ npm install
 ```
 
 Production updates only run when the app is **installed from a built** `.deb` / `.rpm`, not `npm start`.
+
+## Printer monitor (setup page)
+
+The setup screen shows USB/CUPS status and a job event log (from `printer_tray` logic). On Linux install:
+
+```bash
+sudo dnf install python3-cups python3-usb   # Fedora
+sudo apt install python3-cups python3-usb   # Ubuntu / Raspberry Pi OS
+```
+
+Without these packages, CUPS job tracking may still work via `lpstat`; USB door/paper alerts need Python + USB access.

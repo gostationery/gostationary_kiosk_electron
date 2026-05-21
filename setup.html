@@ -97,6 +97,12 @@
       color: #a0aec0;
       margin-top: 5px;
     }
+    .hint code {
+      font-size: 11px;
+      background: #edf2f7;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
 
     .row-actions {
       display: flex;
@@ -154,6 +160,28 @@
     .check-row strong { display: block; font-size: 14px; margin-bottom: 4px; color: #2d3748; }
     .check-row span { font-size: 12px; color: #718096; line-height: 1.45; }
 
+    .print-backend-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .print-backend-group .check-row { margin: 0; cursor: pointer; }
+    .print-backend-group .check-row:has(input:checked) {
+      border-color: #3182ce;
+      background: #ebf8ff;
+    }
+
+    .server-status {
+      font-size: 13px;
+      margin-top: 8px;
+      min-height: 1.25em;
+    }
+    .server-status.ok { color: #276749; }
+    .server-status.bad { color: #c53030; }
+    .server-status.pending { color: #4a5568; }
+
+    .cups-only[hidden] { display: none !important; }
+
     .error {
       font-size: 13px;
       color: #c53030;
@@ -176,6 +204,92 @@
       color: #cbd5e0;
       margin-top: 20px;
       line-height: 1.5;
+    }
+
+    .monitor-panel {
+      margin-top: 12px;
+      padding: 14px 16px;
+      background: #f7fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      font-size: 12px;
+    }
+    .monitor-panel.has-alert {
+      border-color: #fc8181;
+      background: #fff5f5;
+    }
+    .status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 12px;
+      margin-bottom: 12px;
+    }
+    .status-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .status-item span:first-child {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #718096;
+      font-weight: 600;
+    }
+    .status-item span:last-child { font-weight: 600; color: #2d3748; }
+    .status-ok { color: #276749 !important; }
+    .status-warn { color: #c05621 !important; }
+    .status-bad { color: #c53030 !important; }
+
+    .alert-list {
+      margin: 0 0 10px;
+      padding: 0;
+      list-style: none;
+    }
+    .alert-list li {
+      font-size: 12px;
+      color: #c53030;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .job-block {
+      margin-bottom: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #e2e8f0;
+    }
+    .job-block strong { font-size: 12px; color: #4a5568; }
+    .job-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 4px 0;
+      font-size: 11.5px;
+    }
+    .job-state-printing { color: #2b6cb0; font-weight: 600; }
+    .job-state-completed { color: #276749; font-weight: 600; }
+    .job-state-failed { color: #c53030; font-weight: 600; }
+
+    .log-box {
+      max-height: 140px;
+      overflow-y: auto;
+      background: #1a202c;
+      color: #e2e8f0;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-family: ui-monospace, monospace;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .log-line { margin-bottom: 4px; word-break: break-word; }
+    .log-line.log-error { color: #fc8181; }
+    .log-line.log-warn { color: #f6ad55; }
+    .log-line.log-success { color: #68d391; }
+    .log-line.log-info { color: #90cdf4; }
+    .monitor-meta {
+      font-size: 10px;
+      color: #a0aec0;
+      margin-top: 8px;
     }
   </style>
 </head>
@@ -235,6 +349,43 @@
       <p class="section-title">Receipt printer</p>
 
       <div class="field">
+        <label>How to print receipts</label>
+        <div class="print-backend-group" role="radiogroup" aria-label="Print backend">
+          <label class="check-row">
+            <input type="radio" name="print-backend" value="system" checked />
+            <div>
+              <strong>System printer (CUPS)</strong>
+              <span>Electron sends jobs to the OS printer queue — choose a printer below.</span>
+            </div>
+          </label>
+          <label class="check-row">
+            <input type="radio" name="print-backend" value="server" />
+            <div>
+              <strong>POS printer service (USB / ESC/POS)</strong>
+              <span>Python service (<code>pos-printer-service</code>) on this machine — default port 6173.</span>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div class="field" id="server-fields" hidden>
+        <label for="printer-server-url">Printer server URL</label>
+        <input
+          id="printer-server-url"
+          type="text"
+          value="http://127.0.0.1:6173"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="hint">Install and start with <code>sudo bash setup.sh</code> in <code>pos-printer-service</code>, or run <code>python printer_service.py</code> locally.</p>
+        <div class="row-actions">
+          <button type="button" class="btn-secondary" id="check-printer-server">Check connection</button>
+        </div>
+        <p class="server-status pending" id="server-status" aria-live="polite">Not checked</p>
+      </div>
+
+      <div class="cups-only" id="cups-printer-fields">
+      <div class="field">
         <label for="printer">Printer for silent receipts</label>
         <select id="printer" aria-label="Select printer">
           <option value="">Loading printers…</option>
@@ -244,14 +395,48 @@
           <button type="button" class="btn-secondary" id="refresh-printers">Refresh list</button>
         </div>
       </div>
+      </div>
 
       <div class="field">
         <label>Test print</label>
-        <p class="hint" style="margin-bottom: 8px;">Sends a short test page to the printer selected above (or automatic).</p>
+        <p class="hint" id="test-print-hint" style="margin-bottom: 8px;">Sends a short test receipt using the selected print backend.</p>
         <div class="row-actions">
           <button type="button" class="btn-outline" id="test-print">Run test print</button>
         </div>
         <p class="ok-msg" id="print-status" aria-live="polite"></p>
+      </div>
+
+      <div class="field" id="printer-monitor-wrap">
+        <label>Printer status &amp; job log</label>
+        <p class="hint" style="margin-bottom: 8px;">
+          Live CUPS queue and USB receipt printer health (Linux). Job start and completion are logged below.
+        </p>
+        <div class="monitor-panel" id="monitor-panel">
+          <ul class="alert-list" id="monitor-alerts" hidden></ul>
+          <div class="status-grid" id="monitor-status-grid">
+            <div class="status-item"><span>USB device</span><span id="st-found">—</span></div>
+            <div class="status-item"><span>Online</span><span id="st-online">—</span></div>
+            <div class="status-item"><span>Door</span><span id="st-door">—</span></div>
+            <div class="status-item"><span>Paper</span><span id="st-paper">—</span></div>
+            <div class="status-item"><span>Low paper</span><span id="st-low">—</span></div>
+            <div class="status-item"><span>Hardware error</span><span id="st-hwerr">—</span></div>
+          </div>
+          <div class="job-block">
+            <strong>Queue</strong>
+            <div class="job-row">
+              <span>Last job</span>
+              <span id="st-last-job">—</span>
+            </div>
+            <div class="job-row">
+              <span>Job status</span>
+              <span id="st-job-status">—</span>
+            </div>
+            <div id="active-jobs-list"></div>
+          </div>
+          <strong style="font-size:12px;color:#4a5568;">Event log</strong>
+          <div class="log-box" id="monitor-log" aria-live="polite"></div>
+          <p class="monitor-meta" id="monitor-updated">Updating…</p>
+        </div>
       </div>
 
       <p class="section-title">Startup</p>
@@ -272,7 +457,7 @@
 
     <p class="shortcut-hint">
       Press <strong>Ctrl+Shift+L</strong> (or <strong>⌘+Shift+L</strong> on Mac) to return here from the kiosk.<br />
-      Printer choice and “open at login” are kept; only the domain and serial above are cleared by that shortcut.
+      Printer backend, printer choice, and “open at login” are kept; only the domain and serial above are cleared by that shortcut.
     </p>
   </div>
 
@@ -284,6 +469,221 @@
     const btn = document.getElementById('submit-btn')
     const printerSelect = document.getElementById('printer')
     const openAtLoginEl = document.getElementById('open-at-login')
+    const serverFields = document.getElementById('server-fields')
+    const cupsPrinterFields = document.getElementById('cups-printer-fields')
+    const printerServerUrlEl = document.getElementById('printer-server-url')
+    const serverStatusEl = document.getElementById('server-status')
+    const testPrintHint = document.getElementById('test-print-hint')
+    const printBackendRadios = document.querySelectorAll('input[name="print-backend"]')
+
+    function isServerBackendSelected() {
+      return document.querySelector('input[name="print-backend"]:checked')?.value === 'server'
+    }
+
+    function updatePrintBackendUI() {
+      const server = isServerBackendSelected()
+      serverFields.hidden = !server
+      if (cupsPrinterFields) cupsPrinterFields.hidden = server
+      if (testPrintHint) {
+        testPrintHint.textContent = server
+          ? 'Sends a test receipt through the printer server (USB / ESC/POS).'
+          : 'Sends a short test page to the printer selected above (or automatic).'
+      }
+    }
+
+    function setServerStatus(text, level) {
+      serverStatusEl.textContent = text
+      serverStatusEl.className = 'server-status ' + (level || 'pending')
+    }
+
+    async function applyPrintBackendFromUI() {
+      const api = window.electronAPI
+      if (!api?.setPrintBackend) return null
+      const usePrinterServer = isServerBackendSelected()
+      return api.setPrintBackend({
+        usePrinterServer,
+        printerServerUrl: printerServerUrlEl?.value?.trim() || 'http://127.0.0.1:6173',
+      })
+    }
+
+    async function refreshServerStatus() {
+      const api = window.electronAPI
+      if (!api?.checkPrinterServer) {
+        setServerStatus('Check API unavailable.', 'bad')
+        return
+      }
+      setServerStatus('Checking…', 'pending')
+      try {
+        const res = await api.checkPrinterServer(printerServerUrlEl?.value?.trim())
+        if (res?.printerServerReachable) {
+          if (res.posPrinterConnected === false) {
+            setServerStatus(
+              'Service is up but USB printer is offline — plug in the printer or run reconnect.',
+              'bad',
+            )
+          } else {
+            setServerStatus('Connected — POS printer service is reachable.', 'ok')
+          }
+        } else {
+          setServerStatus(
+            'Not reachable. Start pos-printer-service and check the URL (default port 6173).',
+            'bad',
+          )
+        }
+      } catch (err) {
+        setServerStatus(err?.message || 'Connection check failed.', 'bad')
+      }
+    }
+
+    function loadPrintBackendPrefs(prefs) {
+      const server = Boolean(prefs?.usePrinterServer)
+      for (const radio of printBackendRadios) {
+        radio.checked = radio.value === (server ? 'server' : 'system')
+      }
+      if (printerServerUrlEl && prefs?.printerServerUrl) {
+        printerServerUrlEl.value = prefs.printerServerUrl
+      }
+      updatePrintBackendUI()
+      if (server) {
+        if (prefs?.printerServerReachable) {
+          setServerStatus('Connected — POS printer service is reachable.', 'ok')
+        } else {
+          setServerStatus('Not reachable — run Check connection after starting the service.', 'bad')
+        }
+      } else {
+        setServerStatus('Not checked', 'pending')
+      }
+    }
+    const monitorPanel = document.getElementById('monitor-panel')
+    const monitorAlerts = document.getElementById('monitor-alerts')
+    const monitorLog = document.getElementById('monitor-log')
+    const monitorUpdated = document.getElementById('monitor-updated')
+    const activeJobsList = document.getElementById('active-jobs-list')
+
+    function setStatusEl(id, text, level) {
+      const el = document.getElementById(id)
+      if (!el) return
+      el.textContent = text
+      el.className = level === 'ok' ? 'status-ok' : level === 'bad' ? 'status-bad' : level === 'warn' ? 'status-warn' : ''
+    }
+
+    function jobStateClass(label) {
+      const s = String(label || '').toLowerCase()
+      if (s === 'printing' || s === 'processing' || s === 'active') return 'job-state-printing'
+      if (s === 'completed') return 'job-state-completed'
+      if (s === 'failed' || s === 'cancelled') return 'job-state-failed'
+      return ''
+    }
+
+    function renderPrinterMonitor(data) {
+      if (!data) return
+      if (!data.supported) {
+        monitorUpdated.textContent = 'Printer hardware monitor is available on Linux only.'
+        return
+      }
+
+      const hw = data.hardware
+      if (!hw) {
+        setStatusEl('st-found', 'CUPS only', 'warn')
+        setStatusEl('st-online', '—', '')
+        setStatusEl('st-door', '—', '')
+        setStatusEl('st-paper', '—', '')
+        setStatusEl('st-low', '—', '')
+        setStatusEl('st-hwerr', '—', '')
+      } else if (!hw.found) {
+        setStatusEl('st-found', 'Not found', 'bad')
+        setStatusEl('st-online', 'No', 'bad')
+        setStatusEl('st-door', '—', '')
+        setStatusEl('st-paper', '—', '')
+        setStatusEl('st-low', '—', '')
+        setStatusEl('st-hwerr', hw.error || '—', 'bad')
+      } else {
+        setStatusEl('st-found', 'Found', 'ok')
+        setStatusEl('st-online', hw.online ? 'Yes' : 'No', hw.online ? 'ok' : 'bad')
+        setStatusEl('st-door', hw.doorOpen ? 'OPEN' : 'Closed', hw.doorOpen ? 'bad' : 'ok')
+        setStatusEl('st-paper', hw.paperEnd ? 'EMPTY' : 'OK', hw.paperEnd ? 'bad' : 'ok')
+        setStatusEl('st-low', hw.paperLow ? 'LOW' : 'OK', hw.paperLow ? 'warn' : 'ok')
+        const hwErr = hw.hardwareError || hw.error
+        setStatusEl('st-hwerr', hwErr === true ? 'Yes' : hwErr || 'None', hwErr ? 'bad' : 'ok')
+      }
+
+      const last = data.lastJob
+      document.getElementById('st-last-job').textContent = last?.name
+        ? last.name.slice(0, 36)
+        : '—'
+      const jobStat = document.getElementById('st-job-status')
+      jobStat.textContent = data.jobStatusLabel || '—'
+      jobStat.className = jobStateClass(data.jobStatusLabel)
+
+      activeJobsList.innerHTML = ''
+      const jobs = data.activeJobs?.length ? data.activeJobs : data.jobs || []
+      if (jobs.length) {
+        for (const j of jobs.slice(0, 8)) {
+          const row = document.createElement('div')
+          row.className = 'job-row'
+          const label = document.createElement('span')
+          label.textContent = `#${j.id} ${(j.name || '').slice(0, 28)}`
+          const st = document.createElement('span')
+          st.textContent = j.stateLabel || String(j.state)
+          st.className = jobStateClass(j.stateLabel)
+          row.appendChild(label)
+          row.appendChild(st)
+          activeJobsList.appendChild(row)
+        }
+      } else {
+        const row = document.createElement('div')
+        row.className = 'job-row'
+        row.innerHTML = '<span>No active CUPS jobs</span><span>—</span>'
+        activeJobsList.appendChild(row)
+      }
+
+      monitorAlerts.innerHTML = ''
+      const alerts = data.alerts || []
+      if (alerts.length) {
+        monitorAlerts.hidden = false
+        monitorPanel.classList.add('has-alert')
+        for (const a of alerts) {
+          const li = document.createElement('li')
+          li.textContent = a
+          monitorAlerts.appendChild(li)
+        }
+      } else {
+        monitorAlerts.hidden = true
+        monitorPanel.classList.remove('has-alert')
+      }
+
+      monitorLog.innerHTML = ''
+      const logs = data.logs || []
+      if (!logs.length) {
+        monitorLog.textContent = 'No events yet.'
+      } else {
+        for (const entry of logs.slice(0, 40)) {
+          const line = document.createElement('div')
+          line.className = 'log-line log-' + (entry.level || 'info')
+          const t = entry.at ? new Date(entry.at).toLocaleTimeString() : ''
+          line.textContent = `[${t}] ${entry.message}`
+          monitorLog.appendChild(line)
+        }
+      }
+
+      monitorUpdated.textContent = data.updatedAt
+        ? 'Updated ' + new Date(data.updatedAt).toLocaleTimeString()
+        : 'Waiting for data…'
+    }
+
+    async function initPrinterMonitor() {
+      const api = window.electronAPI
+      if (!api?.getPrinterMonitor) {
+        monitorUpdated.textContent = 'Monitor API unavailable.'
+        return
+      }
+      try {
+        renderPrinterMonitor(await api.getPrinterMonitor())
+      } catch (_) {}
+      if (api.onPrinterMonitorUpdate) {
+        api.onPrinterMonitorUpdate(renderPrinterMonitor)
+      }
+    }
 
     function printerLabel(p) {
       const d = (p.displayName || '').trim()
@@ -338,6 +738,29 @@
       } catch (_) {}
     })
 
+    for (const radio of printBackendRadios) {
+      radio.addEventListener('change', async () => {
+        updatePrintBackendUI()
+        printStatus.textContent = ''
+        try {
+          await applyPrintBackendFromUI()
+        } catch (_) {}
+      })
+    }
+
+    printerServerUrlEl?.addEventListener('change', async () => {
+      if (!isServerBackendSelected()) return
+      printStatus.textContent = ''
+      try {
+        await applyPrintBackendFromUI()
+        await refreshServerStatus()
+      } catch (_) {}
+    })
+
+    document.getElementById('check-printer-server')?.addEventListener('click', () => {
+      void refreshServerStatus()
+    })
+
     openAtLoginEl.addEventListener('change', async () => {
       const api = window.electronAPI
       if (!api?.setOpenAtLogin) return
@@ -355,18 +778,34 @@
         return
       }
       const name = printerSelect.value || undefined
+      const testBtn = document.getElementById('test-print')
+      testBtn.disabled = true
+      printStatus.style.color = '#4a5568'
+      printStatus.textContent = 'Sending test print…'
       try {
         const res = await api.testPrint(name)
         if (res?.success) {
           printStatus.style.color = '#276749'
-          printStatus.textContent = 'Test print job sent.'
+          if (res.via === 'server') {
+            printStatus.textContent = 'Test print sent via printer server.'
+          } else {
+            printStatus.textContent = res.queueCompleted
+              ? 'Test print completed (CUPS job finished).'
+              : 'Test print sent to printer.'
+          }
         } else {
           printStatus.style.color = '#c53030'
-          printStatus.textContent = 'Print failed: ' + (res?.errorType || 'unknown')
+          const extra = res?.incompleteJobs?.length
+            ? ` — ${res.incompleteJobs.length} job(s) still in queue`
+            : ''
+          printStatus.textContent =
+            'Print failed: ' + (res?.errorType || 'unknown') + extra
         }
       } catch (err) {
         printStatus.style.color = '#c53030'
         printStatus.textContent = err?.message || 'Test print failed.'
+      } finally {
+        testBtn.disabled = false
       }
     })
 
@@ -378,12 +817,15 @@
           const prefs = await api.getKioskPrefs()
           openAtLoginEl.checked = Boolean(prefs.openAtLogin)
           if (backendEl && prefs.backendUrl) backendEl.value = prefs.backendUrl
+          loadPrintBackendPrefs(prefs)
         } catch (_) {}
       }
       if (backendEl && !backendEl.value) {
         backendEl.value = 'http://127.0.0.1:8000'
       }
+      updatePrintBackendUI()
       await refreshPrinters()
+      await initPrinterMonitor()
     })
 
     form.addEventListener('submit', async (e) => {
@@ -414,6 +856,8 @@
           backendUrl,
           printerName: printerSelect.value || '',
           openAtLogin: openAtLoginEl.checked,
+          usePrinterServer: isServerBackendSelected(),
+          printerServerUrl: printerServerUrlEl?.value?.trim() || 'http://127.0.0.1:6173',
         })
       } catch (err) {
         errorMsg.textContent = err?.message || 'Something went wrong. Please try again.'

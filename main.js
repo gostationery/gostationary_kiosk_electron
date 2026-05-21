@@ -20,9 +20,36 @@ const path = require('path')
 const fs = require('fs')
 const { createKioskStaticServer, KIOSK_UI_DIR } = require('./kiosk-static-server')
 const { initAutoUpdater } = require('./auto-updater')
+const {
+  startPrinterMonitor,
+  stopPrinterMonitor,
+  getPrinterMonitorSnapshot,
+  waitForPrintQueueIdle,
+  pushLog: pushPrinterLog,
+} = require('./printer-monitor')
+const { buildEscPosFromWebContents } = require('./receipt-to-escpos')
+const {
+  measureContentHeightMicrons,
+  receiptPrintOptions,
+} = require('./receipt-cups-layout')
+const {
+  DEFAULT_URL: DEFAULT_PRINTER_SERVER_URL,
+  isServerAvailable,
+  printEscPos,
+  fetchHealth,
+  assertPrinterReady,
+} = require('./printer-server-client')
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000'
 const KIOSK_STATIC_PORT_PREFERRED = 47831
+
+// Linux: suppress GL/vsync noise (GetVSyncParametersIfAvailable) on Wayland / some drivers.
+// Software rendering is fine for kiosk UI + printToPDF receipts.
+if (process.platform === 'linux') {
+  app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu-compositing')
+  app.commandLine.appendSwitch('disable-features', 'Vulkan,VulkanFromANGLE')
+}
 
 // ── Config helpers ──────────────────────────────────────────────────────────
 const CONFIG_PATH = path.join(app.getPath('userData'), 'kiosk-config.json')
@@ -52,6 +79,10 @@ function clearMachinePairing() {
   const prev = loadConfig()
   const next = {}
   if (prev?.printerName) next.printerName = prev.printerName
+  if (typeof prev?.usePrinterServer === 'boolean') {
+    next.usePrinterServer = prev.usePrinterServer
+  }
+  if (prev?.printerServerUrl) next.printerServerUrl = prev.printerServerUrl
   if (typeof prev?.openAtLogin === 'boolean') next.openAtLogin = prev.openAtLogin
   if (prev?.backendUrl) next.backendUrl = prev.backendUrl
   clearConfigFile()
@@ -116,61 +147,6 @@ function pickPhysicalPrinter(printers) {
   })
 }
 
-/** CSS reference px → microns (1px = 1/96 in at 96dpi). */
-const CSS_PX_TO_MICRONS = (25.4 / 96) * 1000
-const RECEIPT_WIDTH_MICRONS = 80000 // 80 mm roll
-const PAGE_HEIGHT_BUFFER_MICRONS = 4000 // ~4 mm slack for driver rounding
-const PAGE_HEIGHT_MIN_MICRONS = 353 // Chromium custom page minimum
-const PAGE_HEIGHT_MAX_MICRONS = 3_000_000 // 3 m cap (single job)
-
-function clampPageHeightMicrons(m) {
-  const n = Number(m)
-  if (!Number.isFinite(n)) return 150_000
-  return Math.round(
-    Math.min(PAGE_HEIGHT_MAX_MICRONS, Math.max(PAGE_HEIGHT_MIN_MICRONS, n)),
-  )
-}
-
-/** Height in microns from #kiosk-receipt-root (kiosk), or scroll root (other pages). */
-async function measureContentHeightMicrons(webContents) {
-  try {
-    const raw = await webContents.executeJavaScript(`(() => {
-      const kiosk = document.getElementById('kiosk-receipt-root')
-      const el = kiosk || document.body
-      if (!el) return 150000
-      const h = Math.ceil(
-        Math.max(
-          1,
-          el.scrollHeight,
-          el.getBoundingClientRect().height,
-          document.documentElement.scrollHeight,
-        ),
-      )
-      return Math.round(h * ${CSS_PX_TO_MICRONS}) + ${PAGE_HEIGHT_BUFFER_MICRONS}
-    })()`)
-    return clampPageHeightMicrons(raw)
-  } catch {
-    return clampPageHeightMicrons(150_000)
-  }
-}
-
-function receiptPrintOptions(deviceName, heightMicrons) {
-  const h = clampPageHeightMicrons(heightMicrons)
-  return {
-    silent: true,
-    printBackground: false,
-    deviceName: deviceName || '',
-    margins: {
-      marginType: 'custom',
-      top: 0.1,
-      bottom: 0.1,
-      left: 0.1,
-      right: 0.1,
-    },
-    pageSize: { width: RECEIPT_WIDTH_MICRONS, height: h },
-  }
-}
-
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;')
@@ -189,6 +165,32 @@ function testPrintHtml() {
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>
     html, body { margin: 0; padding: 0; color: #000; background: #fff; }
     body { font-family: 'Courier New', Courier, monospace; font-size: 14px; font-weight: 600; }
+    @media print {
+      * { margin: 0; padding: 0; }
+      html, body { margin: 0 !important; padding: 0 !important; width: 80mm !important; height: auto !important; }
+      body > *:not(#kiosk-receipt-root) { display: none !important; }
+      #kiosk-receipt-root {
+        display: block !important;
+        position: static !important;
+        opacity: 1 !important;
+        color: #000 !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+        width: 72mm !important;
+        max-width: 72mm !important;
+        margin: 0 !important;
+        padding: 3mm 2mm !important;
+        box-sizing: border-box !important;
+        font-family: 'Courier New', Courier, monospace !important;
+        font-size: 14px !important;
+        font-weight: 600 !important;
+      }
+      #kiosk-receipt-root img {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      @page { size: 80mm auto; margin: 0mm 4mm; }
+    }
     #kiosk-receipt-root {
       box-sizing: border-box;
       width: 72mm;
@@ -226,6 +228,90 @@ const TOKEN_PRINT_JOB_TTL_MS = 30 * 60 * 1000
 /** @type {Map<string, { expected: Set<string>, printed: Set<string>, createdAt: number }>} */
 const tokenPrintJobs = new Map()
 let printChain = Promise.resolve()
+/** @type {boolean | null} */
+let printerServerReachable = null
+
+function isPrinterServerEnabled() {
+  return loadConfig()?.usePrinterServer === true
+}
+
+function resetPrinterServerCache() {
+  printerServerReachable = null
+}
+
+function getPrinterServerUrl() {
+  if (!isPrinterServerEnabled()) return null
+  const cfg = loadConfig()
+  return (
+    cfg?.printerServerUrl ||
+    process.env.PRINTER_SERVER_URL ||
+    DEFAULT_PRINTER_SERVER_URL
+  )
+}
+
+async function probePrinterServer(url = getPrinterServerUrl()) {
+  if (!url) return false
+  let ok = false
+  try {
+    const health = await fetchHealth(url)
+    ok = health?.status === 'ok'
+    if (ok) {
+      const connected = health?.printer?.connected
+      console.log(
+        '[GoStationary Kiosk] POS printer service reachable:',
+        url,
+        connected === false ? '(USB printer offline)' : '',
+      )
+    }
+  } catch {
+    ok = await isServerAvailable(url)
+  }
+  printerServerReachable = ok
+  return ok
+}
+
+async function usePrinterServer() {
+  if (!isPrinterServerEnabled()) return false
+  const url = getPrinterServerUrl()
+  if (!url) return false
+  if (printerServerReachable === null) {
+    await probePrinterServer(url)
+  }
+  return Boolean(printerServerReachable)
+}
+
+function printerServerUnavailableResult(slipId) {
+  return {
+    success: false,
+    errorType: 'printer-server-unavailable',
+    slipId: slipId || undefined,
+  }
+}
+
+function remainingTokenSlips(jobId, excludingSlipId) {
+  const job = tokenPrintJobs.get(String(jobId))
+  if (!job) return 0
+  return [...job.expected].filter(
+    (id) => !job.printed.has(id) && id !== String(excludingSlipId || ''),
+  ).length
+}
+
+/** Cut between token slips vs final slip (matches prior printer-communication behaviour). */
+function slipCutOptions(meta = {}) {
+  const jobId = meta.jobId ? String(meta.jobId) : ''
+  const slipId = meta.slipId ? String(meta.slipId) : ''
+  if (!jobId || !slipId) {
+    return {
+      cut: meta.cut || 'full',
+      feedLinesBeforeCut: meta.feedLinesBeforeCut ?? 4,
+    }
+  }
+  const isLast = remainingTokenSlips(jobId, slipId) <= 0
+  return {
+    cut: meta.cut ?? (isLast ? 'full' : 'partial'),
+    feedLinesBeforeCut: meta.feedLinesBeforeCut ?? (isLast ? 4 : 2),
+  }
+}
 
 function pruneTokenPrintJobs() {
   const now = Date.now()
@@ -323,21 +409,86 @@ async function printReceiptSlip(meta = {}) {
   const slipId = meta.slipId ? String(meta.slipId) : ''
 
   if (jobId && slipId) {
+    const domOk = await waitForSlipDom(mainWindow.webContents, slipId)
+    if (!domOk) {
+      console.error('[GoStationary Kiosk] print-slip: DOM slip mismatch', slipId)
+      return { success: false, errorType: 'dom-slip-mismatch', slipId }
+    }
     pruneTokenPrintJobs()
     const job = tokenPrintJobs.get(jobId)
     if (!job || !job.expected.has(slipId)) {
       console.error('[GoStationary Kiosk] print-slip: slip not in job manifest', jobId, slipId)
       return { success: false, errorType: 'slip-not-in-manifest', slipId }
     }
-    const domOk = await waitForSlipDom(mainWindow.webContents, slipId)
-    if (!domOk) {
-      console.error('[GoStationary Kiosk] print-slip: DOM slip mismatch', slipId)
-      return { success: false, errorType: 'dom-slip-mismatch', slipId }
+  }
+
+  if (isPrinterServerEnabled()) {
+    if (!(await usePrinterServer())) {
+      return printerServerUnavailableResult(slipId)
+    }
+  }
+
+  if (isPrinterServerEnabled()) {
+    try {
+      const url = getPrinterServerUrl()
+      await assertPrinterReady(url)
+      const escpos = await buildEscPosFromWebContents(
+        mainWindow.webContents,
+        slipCutOptions(meta),
+      )
+      const result = await printEscPos(url, escpos)
+      if (result.success) {
+        if (jobId && slipId) {
+          const job = tokenPrintJobs.get(jobId)
+          if (job) job.printed.add(slipId)
+        }
+        pushPrinterLog(
+          'info',
+          slipId ? `Printed via POS service (slip ${slipId})` : 'Printed via POS service',
+        )
+      } else {
+        pushPrinterLog('error', `POS print failed: ${result.errorType || 'unknown'}`)
+      }
+      return {
+        success: Boolean(result.success),
+        errorType: result.success ? undefined : result.errorType,
+        slipId: slipId || undefined,
+      }
+    } catch (err) {
+      pushPrinterLog('error', `POS print: ${err.message}`)
+      return {
+        success: false,
+        errorType: err.errorType || String(err.message || err),
+        slipId: slipId || undefined,
+      }
     }
   }
 
   const deviceName = await resolvePrinterDeviceName()
   const result = await printWebContents(mainWindow.webContents, deviceName)
+
+  if (result.success) {
+    pushPrinterLog(
+      'info',
+      slipId ? `Print job sent (slip ${slipId})` : 'Print job sent',
+    )
+    if (process.platform === 'linux') {
+      const queue = await waitForPrintQueueIdle(60000)
+      if (queue.ok === false) {
+        pushPrinterLog('warn', queue.error)
+        return {
+          success: false,
+          errorType: 'cups-queue-timeout',
+          slipId: slipId || undefined,
+        }
+      }
+    }
+  } else {
+    pushPrinterLog(
+      'error',
+      `Print failed: ${result.errorType || 'unknown'}${slipId ? ` (${slipId})` : ''}`,
+    )
+  }
 
   if (result.success && jobId && slipId) {
     const job = tokenPrintJobs.get(jobId)
@@ -405,6 +556,7 @@ app.whenReady().then(async () => {
   }
   createWindow()
   initAutoUpdater()
+  startPrinterMonitor()
 
   globalShortcut.register('CommandOrControl+Shift+L', () => {
     clearMachinePairing()
@@ -422,6 +574,7 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  stopPrinterMonitor()
   if (kioskStaticServer?.close) {
     void kioskStaticServer.close()
   }
@@ -445,6 +598,15 @@ ipcMain.handle('save-config', (_event, cfg) => {
   if (typeof cfg.openAtLogin === 'boolean') {
     merged.openAtLogin = cfg.openAtLogin
   }
+  if (typeof cfg.usePrinterServer === 'boolean') {
+    merged.usePrinterServer = cfg.usePrinterServer
+    resetPrinterServerCache()
+  }
+  if (cfg.printerServerUrl !== undefined) {
+    const u = String(cfg.printerServerUrl).trim()
+    merged.printerServerUrl = u || DEFAULT_PRINTER_SERVER_URL
+    resetPrinterServerCache()
+  }
   saveConfig(merged)
   applyOpenAtLoginFromConfig(merged)
   mainWindow.loadURL(kioskURL(merged))
@@ -455,13 +617,76 @@ ipcMain.handle('get-printers', async () => {
   return mainWindow.webContents.getPrintersAsync()
 })
 
-ipcMain.handle('get-kiosk-prefs', () => {
+ipcMain.handle('get-printer-monitor', () => getPrinterMonitorSnapshot())
+
+ipcMain.handle('get-kiosk-prefs', async () => {
   const cfg = loadConfig()
+  const usePrinterServer = cfg?.usePrinterServer === true
+  const printerServerUrl =
+    cfg?.printerServerUrl ||
+    process.env.PRINTER_SERVER_URL ||
+    DEFAULT_PRINTER_SERVER_URL
+  let printerServerReachable = false
+  if (usePrinterServer) {
+    printerServerReachable = await probePrinterServer(printerServerUrl)
+  } else {
+    resetPrinterServerCache()
+  }
   return {
     printerName: cfg?.printerName || '',
     openAtLogin: Boolean(cfg?.openAtLogin),
     backendUrl: normalizeBackendUrl(cfg?.backendUrl),
+    usePrinterServer,
+    printerServerUrl,
+    printerServerReachable,
+    posPrinterConnected: printerServerReachable
+      ? (await fetchHealth(printerServerUrl).catch(() => null))?.printer?.connected
+      : undefined,
   }
+})
+
+ipcMain.handle('set-print-backend', async (_event, opts) => {
+  const prev = loadConfig() || {}
+  const merged = { ...prev }
+  if (typeof opts?.usePrinterServer === 'boolean') {
+    merged.usePrinterServer = opts.usePrinterServer
+  }
+  if (opts?.printerServerUrl !== undefined) {
+    const u = String(opts.printerServerUrl).trim()
+    merged.printerServerUrl = u || DEFAULT_PRINTER_SERVER_URL
+  }
+  saveConfig(merged)
+  resetPrinterServerCache()
+  const usePrinterServer = merged.usePrinterServer === true
+  const printerServerUrl =
+    merged.printerServerUrl ||
+    process.env.PRINTER_SERVER_URL ||
+    DEFAULT_PRINTER_SERVER_URL
+  const printerServerReachable = usePrinterServer
+    ? await probePrinterServer(printerServerUrl)
+    : false
+  return { usePrinterServer, printerServerUrl, printerServerReachable }
+})
+
+ipcMain.handle('check-printer-server', async (_event, urlArg) => {
+  const cfg = loadConfig()
+  const url =
+    (urlArg && String(urlArg).trim()) ||
+    cfg?.printerServerUrl ||
+    process.env.PRINTER_SERVER_URL ||
+    DEFAULT_PRINTER_SERVER_URL
+  resetPrinterServerCache()
+  const printerServerReachable = await probePrinterServer(url)
+  let posPrinterConnected
+  if (printerServerReachable) {
+    try {
+      const health = await fetchHealth(url)
+      posPrinterConnected = health?.printer?.connected
+    } catch {
+      posPrinterConnected = undefined
+    }
+  }
+  return { printerServerUrl: url, printerServerReachable, posPrinterConnected }
 })
 
 ipcMain.handle('notify-kiosk-activity', () => {
@@ -481,8 +706,79 @@ ipcMain.handle('set-open-at-login', (_event, open) => {
   applyOpenAtLoginFromConfig(merged)
 })
 
+/** Test receipt via POS service — same hidden Chromium page as CUPS test print. */
+async function printTestReceiptViaPosService(baseUrl) {
+  const win = new BrowserWindow({
+    show: false,
+    width: 420,
+    height: 640,
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  })
+  try {
+    await win.loadURL(
+      'data:text/html;charset=utf-8,' + encodeURIComponent(testPrintHtml()),
+    )
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('test page load timeout')), 15000)
+      win.webContents.once('did-finish-load', () => {
+        clearTimeout(t)
+        setTimeout(resolve, 300)
+      })
+      win.webContents.once('did-fail-load', (_e, code, desc) => {
+        clearTimeout(t)
+        reject(new Error(desc || `load failed ${code}`))
+      })
+    })
+    const escpos = await buildEscPosFromWebContents(win.webContents, {
+      cut: 'full',
+      feedLinesBeforeCut: 4,
+    })
+    return await printEscPos(baseUrl, escpos)
+  } finally {
+    win.close()
+  }
+}
+
 ipcMain.handle('test-print', async (_event, deviceNameArg) => {
   const cfg = loadConfig()
+  if (cfg?.usePrinterServer === true) {
+    const url = getPrinterServerUrl()
+    resetPrinterServerCache()
+    if (!(await probePrinterServer(url))) {
+      pushPrinterLog('error', 'Printer server not reachable: ' + url)
+      return {
+        success: false,
+        errorType: 'printer-server-unavailable',
+        via: 'server',
+        printerServerUrl: url,
+      }
+    }
+    try {
+      await assertPrinterReady(url)
+      const testResult = await printTestReceiptViaPosService(url)
+      if (testResult?.success) {
+        pushPrinterLog('info', 'Test print sent via POS printer service')
+      } else {
+        pushPrinterLog(
+          'error',
+          'POS test print failed: ' + (testResult?.errorType || 'unknown'),
+        )
+      }
+      return { ...testResult, via: 'server' }
+    } catch (err) {
+      pushPrinterLog('error', 'POS printer test print: ' + err.message)
+      return {
+        success: false,
+        errorType: String(err.message || err),
+        via: 'server',
+      }
+    }
+  }
+
   const fromArg = deviceNameArg != null && String(deviceNameArg).length > 0
   let deviceName = fromArg ? String(deviceNameArg) : cfg?.printerName || ''
   if (!deviceName && mainWindow?.webContents) {
@@ -507,9 +803,21 @@ ipcMain.handle('test-print', async (_event, deviceNameArg) => {
     win.webContents.once('did-finish-load', () => {
       setTimeout(async () => {
         const heightMicrons = await measureContentHeightMicrons(win.webContents)
-        win.webContents.print(receiptPrintOptions(deviceName, heightMicrons), (success, errorType) => {
+        win.webContents.print(receiptPrintOptions(deviceName, heightMicrons), async (success, errorType) => {
           win.close()
-          resolve({ success, errorType: success ? undefined : errorType })
+          if (!success) {
+            pushPrinterLog('error', 'Test print failed: ' + (errorType || 'unknown'))
+            resolve({ success: false, errorType })
+            return
+          }
+          pushPrinterLog('info', 'Test print sent to printer')
+          const queue = await waitForPrintQueueIdle(90000)
+          resolve({
+            success: success && queue.ok !== false,
+            errorType: queue.ok === false ? queue.error : undefined,
+            queueCompleted: queue.completed,
+            incompleteJobs: queue.incompleteJobs,
+          })
         })
       }, 300)
     })
@@ -517,7 +825,10 @@ ipcMain.handle('test-print', async (_event, deviceNameArg) => {
 })
 
 // ── IPC: Token print job + verified slip print ───────────────────────────────
-ipcMain.handle('begin-token-print-job', (_event, payload) => {
+ipcMain.handle('begin-token-print-job', async (_event, payload) => {
+  if (isPrinterServerEnabled() && !(await usePrinterServer())) {
+    throw new Error('POS printer service is not reachable')
+  }
   const jobId = payload?.jobId ? String(payload.jobId) : ''
   const slips = Array.isArray(payload?.slips) ? payload.slips : []
   if (!jobId || slips.length === 0) {
@@ -536,8 +847,11 @@ ipcMain.handle('begin-token-print-job', (_event, payload) => {
   return { jobId, expected: expected.size }
 })
 
-ipcMain.handle('get-token-print-status', (_event, jobIdArg) => {
+ipcMain.handle('get-token-print-status', async (_event, jobIdArg) => {
   const jobId = jobIdArg ? String(jobIdArg) : ''
+  if (isPrinterServerEnabled() && !(await usePrinterServer())) {
+    return { expected: 0, printed: 0, missing: [], errorType: 'printer-server-unavailable' }
+  }
   const job = tokenPrintJobs.get(jobId)
   if (!job) {
     return { expected: 0, printed: 0, missing: [] }
@@ -556,5 +870,19 @@ ipcMain.handle('print-slip', (_event, meta) =>
 
 /** Legacy single-shot print (invoice / one receipt). */
 ipcMain.handle('silent-print', () =>
-  enqueuePrint(() => printReceiptSlip({})),
+  enqueuePrint(async () => {
+    if (isPrinterServerEnabled()) {
+      if (!(await usePrinterServer())) {
+        return printerServerUnavailableResult()
+      }
+      const url = getPrinterServerUrl()
+      await assertPrinterReady(url)
+      const escpos = await buildEscPosFromWebContents(mainWindow.webContents, {
+        cut: 'full',
+        feedLinesBeforeCut: 4,
+      })
+      return printEscPos(url, escpos)
+    }
+    return printReceiptSlip({})
+  }),
 )

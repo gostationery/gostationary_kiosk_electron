@@ -29,9 +29,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   setOpenAtLogin: (open) => ipcRenderer.invoke('set-open-at-login', open),
 
+  /** System CUPS printer vs local Node printer server */
+  setPrintBackend: (opts) => ipcRenderer.invoke('set-print-backend', opts),
+
+  checkPrinterServer: (url) => ipcRenderer.invoke('check-printer-server', url),
+
   /** Optional deviceName; falls back to saved or first physical printer */
   testPrint: (deviceName) => ipcRenderer.invoke('test-print', deviceName),
 
   /** Kiosk UI: activity ping so idle hard-refresh does not interrupt checkout */
   notifyKioskActivity: () => ipcRenderer.invoke('notify-kiosk-activity'),
+
+  /** CUPS / USB printer monitor (Linux setup page) */
+  getPrinterMonitor: () => ipcRenderer.invoke('get-printer-monitor'),
+
+  onPrinterMonitorUpdate: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('printer-monitor-update', listener)
+    return () => ipcRenderer.removeListener('printer-monitor-update', listener)
+  },
 })

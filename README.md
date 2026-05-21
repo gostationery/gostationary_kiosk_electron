@@ -13,6 +13,15 @@ npm install
 npm start
 ```
 
+If `npm start` fails with **EACCES** on `kiosk-ui`, a previous build was likely run as root. Fix ownership once, then start again:
+
+```bash
+sudo chown -R "$USER:$USER" kiosk-ui
+npm start
+```
+
+Avoid running `npm run build:linux` or `electron-builder` with `sudo` — that leaves root-owned files in `kiosk-ui` and `dist/`.
+
 On first launch you'll see the **Setup screen** → enter your **Org Domain**, **Machine Serial Number**, and **Backend API URL** (default `http://127.0.0.1:8000`) → click **Launch Kiosk**.  
 The app serves the **same kiosk UI** as the web app from a local bundle and talks to your backend directly (no hosted frontend). Credentials are stored locally and the kiosk auto-loads on every subsequent launch.
 
@@ -23,6 +32,20 @@ cd gostationary_kiosk_electron
 npm run prepare:kiosk   # builds frontend + copies dist → kiosk-ui/
 npm start
 ```
+
+### Linux system dependencies (printer monitor)
+
+On the **Setup** screen, the app shows live printer health (USB door/paper/error) and CUPS job logs (job started / completed / failed). Install these on each kiosk machine:
+
+| Distro | Command |
+|--------|---------|
+| Fedora | `sudo dnf install python3-cups python3-usb` |
+| Ubuntu / Debian | `sudo apt install python3-cups python3-usb` |
+| Raspberry Pi OS | `sudo apt install python3-cups python3-usb` |
+
+- **CUPS** must be running and the receipt printer configured in the OS print system.
+- Without `python3-cups` / `python3-usb`, basic queue info may still appear via `lpstat`; USB door and paper alerts require the Python packages above.
+- For **building** `.rpm` packages locally on Fedora, also install `rpm-build` and use **electron-builder ≥ 26** (see `npm run build:linux`).
 
 ---
 
@@ -69,6 +92,7 @@ Persistent print failures are logged to the backend (`POST .../print-events`) an
 ### Requirements
 - At least **one physical printer** must be installed and set as the OS default, or the app will fall back to whatever `deviceName: ''` resolves to.
 - 80 mm thermal receipt paper is recommended (the bill layout is sized for 80 mm width).
+- On Linux kiosks, install [printer monitor dependencies](#linux-system-dependencies-printer-monitor) for full status and job logging on the Setup page.
 
 ---
 

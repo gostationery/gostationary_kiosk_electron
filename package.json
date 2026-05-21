@@ -33,6 +33,14 @@
     },
     "files": [
       "main.js",
+      "printer-server-client.js",
+      "receipt-to-escpos.js",
+      "receipt-cups-layout.js",
+      "prepare-receipt-html-for-server.js",
+      "printer-lib/**",
+      "node_modules/pngjs/**",
+      "printer-monitor.js",
+      "scripts/printer-monitor-cli.py",
       "auto-updater.js",
       "preload.js",
       "setup.html",
@@ -69,6 +77,12 @@
         }
       ]
     },
+    "npmRebuild": true,
+    "asarUnpack": [
+      "**/node_modules/sharp/**/*",
+      "**/node_modules/@img/**/*",
+      "**/node_modules/pngjs/**/*"
+    ],
     "linux": {
       "icon": "assets/icon.png",
       "category": "Office",
@@ -107,10 +121,12 @@
         "libnss3",
         "libxss1",
         "libxtst6",
-        "xdg-utils"
+        "xdg-utils",
+        "libvips42"
       ],
       "recommends": [
-        "libappindicator3-1"
+        "libappindicator3-1",
+        "poppler-utils"
       ]
     },
     "rpm": {
@@ -120,7 +136,9 @@
         "nss",
         "libXScrnSaver",
         "libXtst",
-        "xdg-utils"
+        "xdg-utils",
+        "vips",
+        "poppler-utils"
       ]
     },
     "nsis": {
@@ -137,7 +155,11 @@
   },
   "dependencies": {
     "electron-log": "^5.4.4",
-    "electron-updater": "^6.8.3"
+    "electron-updater": "^6.8.3",
+    "pngjs": "^6.0.0"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
     "electron": "^33.0.0",
