@@ -24,6 +24,74 @@ const { initAutoUpdater } = require('./auto-updater')
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000'
 const KIOSK_STATIC_PORT_PREFERRED = 47831
 
+function getKioskFileLogger() {
+  try {
+    const log = require('electron-log')
+    log.transports.file.level = 'info'
+    log.transports.file.resolvePathFn = () =>
+      path.join(app.getPath('userData'), 'logs', 'kiosk.log')
+    return log
+  } catch {
+    return null
+  }
+}
+
+const kioskFileLog = getKioskFileLogger()
+
+function mainLog(message, detail) {
+  const line = detail ? `${message} ${JSON.stringify(detail)}` : message
+  console.log(`[GoStationary Kiosk] ${line}`)
+  kioskFileLog?.info(line)
+}
+
+function attachKioskWebLogging(win) {
+  const wc = win.webContents
+
+  wc.on('did-start-loading', () => {
+    mainLog('renderer: loading started', { url: wc.getURL() })
+  })
+
+  wc.on('did-finish-load', () => {
+    mainLog('renderer: load finished', { url: wc.getURL() })
+  })
+
+  wc.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    mainLog('renderer: load failed', {
+      errorCode,
+      errorDescription,
+      url: validatedURL,
+    })
+  })
+
+  wc.on('did-navigate', (_event, url) => {
+    mainLog('renderer: navigated', { url })
+  })
+
+  wc.on('did-navigate-in-page', (_event, url) => {
+    mainLog('renderer: in-page navigation', { url })
+  })
+
+  wc.on('console-message', (_event, level, message, line, sourceId) => {
+    const text = String(message ?? '')
+    if (
+      text.includes('[GoStationary Kiosk UI]') ||
+      text.includes('[GoStationary Kiosk]') ||
+      level >= 2
+    ) {
+      mainLog('renderer-console', {
+        level,
+        message: text,
+        line,
+        sourceId,
+      })
+    }
+  })
+
+  wc.on('render-process-gone', (_event, details) => {
+    mainLog('renderer: process gone', details)
+  })
+}
+
 // ── Config helpers ──────────────────────────────────────────────────────────
 const CONFIG_PATH = path.join(app.getPath('userData'), 'kiosk-config.json')
 
@@ -116,49 +184,54 @@ function pickPhysicalPrinter(printers) {
   })
 }
 
-/** CSS reference px → microns (1px = 1/96 in at 96dpi). */
-const CSS_PX_TO_MICRONS = (25.4 / 96) * 1000
-const RECEIPT_WIDTH_MICRONS = 80000 // 80 mm roll
-const PAGE_HEIGHT_BUFFER_MICRONS = 4000 // ~4 mm slack for driver rounding
-const PAGE_HEIGHT_MIN_MICRONS = 353 // Chromium custom page minimum
-const PAGE_HEIGHT_MAX_MICRONS = 3_000_000 // 3 m cap (single job)
+/** Fixed 80 mm × 297 mm thermal roll — microns, no DOM measurement. */
+const RECEIPT_WIDTH_MICRONS = 80000
+const RECEIPT_HEIGHT_MICRONS = 4000_000
+const PRINT_SETTLE_MS = 300
+const TEST_PRINT_WINDOW_WIDTH = 420
+/** 297 mm roll height in CSS px (+ headroom) — window sized by math, not DOM. */
+const TEST_PRINT_WINDOW_HEIGHT = Math.ceil((297 / 25.4) * 96) + 200
 
-function clampPageHeightMicrons(m) {
-  const n = Number(m)
-  if (!Number.isFinite(n)) return 150_000
-  return Math.round(
-    Math.min(PAGE_HEIGHT_MAX_MICRONS, Math.max(PAGE_HEIGHT_MIN_MICRONS, n)),
-  )
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms))
 }
 
-/** Height in microns from #kiosk-receipt-root (kiosk), or scroll root (other pages). */
-async function measureContentHeightMicrons(webContents) {
-  try {
-    const raw = await webContents.executeJavaScript(`(() => {
-      const kiosk = document.getElementById('kiosk-receipt-root')
-      const el = kiosk || document.body
-      if (!el) return 150000
-      const h = Math.ceil(
-        Math.max(
-          1,
-          el.scrollHeight,
-          el.getBoundingClientRect().height,
-          document.documentElement.scrollHeight,
-        ),
-      )
-      return Math.round(h * ${CSS_PX_TO_MICRONS}) + ${PAGE_HEIGHT_BUFFER_MICRONS}
-    })()`)
-    return clampPageHeightMicrons(raw)
-  } catch {
-    return clampPageHeightMicrons(150_000)
-  }
+/** Off-screen window: invisible to the user but painted so Windows prints the full page. */
+function createOffscreenPrintWindow() {
+  return new BrowserWindow({
+    show: false,
+    x: -20000,
+    y: -20000,
+    width: TEST_PRINT_WINDOW_WIDTH,
+    height: TEST_PRINT_WINDOW_HEIGHT,
+    opacity: 0,
+    frame: false,
+    skipTaskbar: true,
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+    },
+  })
 }
 
-function receiptPrintOptions(deviceName, heightMicrons) {
-  const h = clampPageHeightMicrons(heightMicrons)
+async function ensureOffscreenPaint(win) {
+  win.setBounds({
+    x: -20000,
+    y: -20000,
+    width: TEST_PRINT_WINDOW_WIDTH,
+    height: TEST_PRINT_WINDOW_HEIGHT,
+  })
+  win.setOpacity(0)
+  win.showInactive()
+  await sleep(process.platform === 'win32' ? 450 : 200)
+}
+
+function receiptPrintOptions(deviceName, overrides = {}) {
   return {
     silent: true,
-    printBackground: false,
+    printBackground: overrides.printBackground ?? false,
     deviceName: deviceName || '',
     margins: {
       marginType: 'custom',
@@ -167,8 +240,21 @@ function receiptPrintOptions(deviceName, heightMicrons) {
       left: 0.1,
       right: 0.1,
     },
-    pageSize: { width: RECEIPT_WIDTH_MICRONS, height: h },
+    pageSize: { width: RECEIPT_WIDTH_MICRONS, height: RECEIPT_HEIGHT_MICRONS },
   }
+}
+
+function printWebContents(webContents, deviceName) {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      webContents.print(receiptPrintOptions(deviceName), (success, errorType) => {
+        resolve({
+          success: Boolean(success),
+          errorType: success ? undefined : errorType,
+        })
+      })
+    }, PRINT_SETTLE_MS)
+  })
 }
 
 function escapeHtml(s) {
@@ -179,45 +265,94 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;')
 }
 
-/** Sample dine-in token slip — same root id as kiosk receipts so height measurement matches silent-print. */
+/**
+ * Test print HTML — plain <p> tags only (same pattern as the original working test).
+ * Printed from an off-screen invisible window so setup stays on screen.
+ */
 function testPrintHtml() {
-  const dateStr = new Date().toLocaleDateString()
-  const timeStr = new Date().toLocaleTimeString()
+  const dateStr = escapeHtml(new Date().toLocaleDateString())
+  const timeStr = escapeHtml(new Date().toLocaleTimeString())
   const when = escapeHtml(new Date().toLocaleString())
-  const sampleToken = '42'
-  const sampleName = 'Test token item'
+
+  const items = [
+    { name: 'Test Coffee', qty: 2, price: 80 },
+    { name: 'Veg Sandwich', qty: 1, price: 120 },
+    { name: 'Cold Coffee Large with Whipped Cream', qty: 1, price: 180 },
+    { name: 'Brownie', qty: 3, price: 75 },
+    { name: 'Bottled Water 1L', qty: 2, price: 40 },
+    { name: 'Cookie', qty: 4, price: 25 },
+  ]
+  const itemLines = items
+    .map((it) => {
+      const amount = (it.qty * it.price).toFixed(2)
+      return `<p class="item">${escapeHtml(it.name)} &nbsp; ${it.qty} &nbsp; ${it.price.toFixed(2)} &nbsp; ${amount}</p>`
+    })
+    .join('\n')
+  const subtotal = items.reduce((s, it) => s + it.qty * it.price, 0)
+  const tax = +(subtotal * 0.05).toFixed(2)
+  const grand = (subtotal + tax).toFixed(2)
+
   return `<!DOCTYPE html><html><head><meta charset="utf-8"/><style>
-    html, body { margin: 0; padding: 0; color: #000; background: #fff; }
-    body { font-family: 'Courier New', Courier, monospace; font-size: 14px; font-weight: 600; }
-    #kiosk-receipt-root {
-      box-sizing: border-box;
-      width: 72mm;
-      max-width: 72mm;
-      margin: 0;
-      padding: 3mm 2mm;
+    html, body {
+      margin: 0; padding: 0; color: #000; background: #fff;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
     }
+    body {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.5;
+      padding: 3mm 2mm;
+      width: 72mm;
+      box-sizing: border-box;
+    }
+    h1 {
+      font-size: 20px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin: 0 0 6px;
+      text-align: center;
+    }
+    p { font-size: 13px; font-weight: 700; margin: 4px 0; line-height: 1.45; color: #000; }
+    p.item { font-size: 14px; font-weight: 800; }
+    p.label { font-size: 12px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+    p.token-num { font-size: 48px; font-weight: 900; line-height: 1; letter-spacing: -1px; }
+    p.token-name { font-size: 22px; font-weight: 900; }
+    p.total { font-size: 16px; font-weight: 900; }
+    .center { text-align: center; }
+    .rule { border-top: 2px dashed #000; margin: 8px 0; height: 0; }
+    .rule-solid { border-top: 2px solid #000; margin: 8px 0; height: 0; }
   </style></head><body>
-    <div id="kiosk-receipt-root">
-      <div style="text-align:center;font-size:11px;font-weight:700;margin-bottom:4px;">TEST PRINT — not a sale</div>
-      <div style="text-align:center;font-size:18px;font-weight:900;letter-spacing:0.06em;text-transform:uppercase;">GoStationary</div>
-      <div style="border-top:2px solid #000;margin:6px 0;"></div>
-      <div style="text-align:center;font-size:14px;font-weight:800;letter-spacing:0.12em;text-transform:uppercase;">★ TOKEN ★</div>
-      <div style="text-align:center;font-size:38px;font-weight:800;margin-top:4px;">${escapeHtml(sampleName)}</div>
-      <div style="border-top:1px dashed #000;margin:6px 0;"></div>
-      <div style="text-align:center;font-size:13px;font-weight:700;margin-bottom:2px;">YOUR TOKEN NUMBER</div>
-      <div style="text-align:center;font-size:48px;font-weight:900;line-height:1;letter-spacing:-1px;margin:6px 0;">${escapeHtml(sampleToken)}</div>
-      <div style="text-align:center;font-size:22px;font-weight:900;">₹1.00</div>
-      <div style="border-top:1px dashed #000;margin:8px 0;"></div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;"><span>Date</span><span>${escapeHtml(dateStr)}</span></div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;"><span>Time</span><span>${escapeHtml(timeStr)}</span></div>
-      <div style="border-top:1px dashed #000;margin:6px 0;"></div>
-      <div style="text-align:center;font-size:12px;font-weight:700;letter-spacing:0.06em;">NON-REFUNDABLE • TOKEN</div>
-      <div style="display:flex;justify-content:space-between;font-size:12px;margin-top:4px;"><span>Mode: Kiosk</span><span>Cashier: Kiosk</span></div>
-      <div style="border-top:1px dashed #000;margin:6px 0;"></div>
-      <div style="text-align:center;font-size:13px;font-weight:700;">Thank you!</div>
-      <div style="text-align:center;font-size:13px;letter-spacing:0.3em;margin-top:4px;">★ ★ ★</div>
-      <div style="border-top:2px dashed #000;margin:10px 0 0;padding-top:6px;font-size:11px;text-align:center;">Printed ${when}</div>
-    </div>
+    <p class="center label">TEST PRINT — not a sale</p>
+    <h1>GoStationary</h1>
+    <p class="center" style="font-weight:800;">Receipt Printer Diagnostic</p>
+    <p class="center" style="font-weight:800;">GSTIN 27ABCDE1234F1Z5</p>
+    <div class="rule-solid"></div>
+    <p>Date ${dateStr} &nbsp;&nbsp; ${timeStr}</p>
+    <p>Cashier: Kiosk &nbsp;&nbsp; Mode: Kiosk</p>
+    <div class="rule"></div>
+    <p style="font-weight:900;font-size:14px;">Item &nbsp; Qty &nbsp; Rate &nbsp; Amt</p>
+    ${itemLines}
+    <div class="rule"></div>
+    <p>Subtotal: ${subtotal.toFixed(2)}</p>
+    <p>Tax (5%): ${tax.toFixed(2)}</p>
+    <p class="total">TOTAL: ₹${grand}</p>
+    <div class="rule"></div>
+    <p class="center label">★ Sample Token ★</p>
+    <p class="center token-name">Test token item</p>
+    <p class="center label">Your token number</p>
+    <p class="center token-num">42</p>
+    <div class="rule"></div>
+    <p class="center label">Non-refundable • test</p>
+    <div class="rule"></div>
+    <p style="font-weight:800;">If you see all 6 items, totals, token block and this line — print is working.</p>
+    <div class="rule"></div>
+    <p class="center" style="font-weight:900;">Thank you!</p>
+    <p class="center" style="font-weight:800;letter-spacing:0.3em;">★ ★ ★</p>
+    <div class="rule-solid"></div>
+    <p class="center" style="font-size:12px;font-weight:800;">Printed ${when}</p>
   </body></html>`
 }
 
@@ -289,27 +424,6 @@ async function resolvePrinterDeviceName() {
   return deviceName
 }
 
-function printWebContents(webContents, deviceName) {
-  return new Promise((resolve) => {
-    measureContentHeightMicrons(webContents)
-      .then((heightMicrons) => {
-        webContents.print(
-          receiptPrintOptions(deviceName, heightMicrons),
-          (success, errorType) => {
-            resolve({
-              success: Boolean(success),
-              errorType: success ? undefined : errorType,
-            })
-          },
-        )
-      })
-      .catch((err) => {
-        console.error('[GoStationary Kiosk] measure/print error:', err)
-        resolve({ success: false, errorType: String(err?.message || err) })
-      })
-  })
-}
-
 /**
  * Print current main-window receipt. Optional jobId+slipId for verified token slips.
  * @param {{ jobId?: string, slipId?: string, index?: number, total?: number, tokenLabel?: string }} meta
@@ -361,12 +475,10 @@ async function startKioskStaticServer() {
   if (kioskStaticServerInfo) return kioskStaticServerInfo
   kioskStaticServer = createKioskStaticServer(KIOSK_UI_DIR)
   kioskStaticServerInfo = await kioskStaticServer.listen(KIOSK_STATIC_PORT_PREFERRED)
-  console.log(
-    '[GoStationary Kiosk] UI server:',
-    kioskStaticServerInfo.origin,
-    '→',
-    KIOSK_UI_DIR,
-  )
+  mainLog('UI static server started', {
+    origin: kioskStaticServerInfo.origin,
+    root: KIOSK_UI_DIR,
+  })
   return kioskStaticServerInfo
 }
 
@@ -384,12 +496,22 @@ function createWindow() {
   })
 
   mainWindow.setMenuBarVisibility(false)
+  attachKioskWebLogging(mainWindow)
 
   const cfg = loadConfig()
   if (cfg?.domain && cfg?.serial) {
-    mainWindow.loadURL(kioskURL(cfg))
+    const url = kioskURL(cfg)
+    mainLog('loading kiosk URL', {
+      url,
+      domain: cfg.domain,
+      serial: cfg.serial,
+      backendUrl: cfg.backendUrl || DEFAULT_BACKEND_URL,
+    })
+    mainWindow.loadURL(url)
   } else {
-    mainWindow.loadFile(path.join(__dirname, 'setup.html'))
+    const setupPath = path.join(__dirname, 'setup.html')
+    mainLog('loading setup (no domain/serial in config)', { setupPath })
+    mainWindow.loadFile(setupPath)
   }
 }
 
@@ -407,6 +529,7 @@ app.whenReady().then(async () => {
   initAutoUpdater()
 
   globalShortcut.register('CommandOrControl+Shift+L', () => {
+    mainLog('shortcut: returning to setup (Ctrl+Shift+L)')
     clearMachinePairing()
     mainWindow.loadFile(path.join(__dirname, 'setup.html'))
   })
@@ -447,7 +570,14 @@ ipcMain.handle('save-config', (_event, cfg) => {
   }
   saveConfig(merged)
   applyOpenAtLoginFromConfig(merged)
-  mainWindow.loadURL(kioskURL(merged))
+  const url = kioskURL(merged)
+  mainLog('setup saved — launching kiosk', {
+    url,
+    domain: merged.domain,
+    serial: merged.serial,
+    backendUrl: merged.backendUrl,
+  })
+  mainWindow.loadURL(url)
 })
 
 ipcMain.handle('get-printers', async () => {
@@ -490,28 +620,61 @@ ipcMain.handle('test-print', async (_event, deviceNameArg) => {
     deviceName = pickPhysicalPrinter(printers)?.name || ''
   }
 
+  const testPrintPath = path.join(app.getPath('temp'), 'gostationary-test-print.html')
+
+  try {
+    fs.writeFileSync(testPrintPath, testPrintHtml(), 'utf8')
+  } catch (err) {
+    return { success: false, errorType: `write-test-html:${err?.message || err}` }
+  }
+
   return new Promise((resolve) => {
-    const win = new BrowserWindow({
-      show: false,
-      width: 420,
-      height: 640,
-      webPreferences: {
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-      },
+    const win = createOffscreenPrintWindow()
+
+    let settled = false
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      try {
+        if (!win.isDestroyed()) win.close()
+      } catch (_) {}
+      resolve(result)
+    }
+
+    const timeout = setTimeout(() => {
+      finish({ success: false, errorType: 'test-print-timeout' })
+    }, 20000)
+
+    win.webContents.once('did-fail-load', (_event, code, desc) => {
+      clearTimeout(timeout)
+      finish({ success: false, errorType: `load-failed:${code}:${desc}` })
     })
-    const url =
-      'data:text/html;charset=utf-8,' + encodeURIComponent(testPrintHtml())
-    win.loadURL(url)
+
+    win.loadFile(testPrintPath)
     win.webContents.once('did-finish-load', () => {
-      setTimeout(async () => {
-        const heightMicrons = await measureContentHeightMicrons(win.webContents)
-        win.webContents.print(receiptPrintOptions(deviceName, heightMicrons), (success, errorType) => {
-          win.close()
-          resolve({ success, errorType: success ? undefined : errorType })
-        })
-      }, 300)
+      ;(async () => {
+        try {
+          await ensureOffscreenPaint(win)
+          mainLog('test-print', {
+            pageHeightMicrons: RECEIPT_HEIGHT_MICRONS,
+            deviceName,
+            via: 'offscreen',
+          })
+          win.webContents.print(
+            receiptPrintOptions(deviceName, { printBackground: true }),
+            (success, errorType) => {
+              clearTimeout(timeout)
+              finish({
+                success: Boolean(success),
+                errorType: success ? undefined : errorType,
+              })
+            },
+          )
+        } catch (err) {
+          clearTimeout(timeout)
+          finish({ success: false, errorType: String(err?.message || err) })
+        }
+      })()
     })
   })
 })
