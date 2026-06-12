@@ -10,7 +10,7 @@
   },
   "main": "main.js",
   "scripts": {
-    "build:kiosk-ui": "cd ../gostationary_kiosk_frontend && pnpm run build:electron",
+    "build:kiosk-ui": "cd ../gostationary_kiosk_frontend && npm run build:electron",
     "sync:kiosk-ui": "node scripts/sync-kiosk-ui.js",
     "prepare:kiosk": "npm run build:kiosk-ui && npm run sync:kiosk-ui",
     "prestart": "npm run sync:kiosk-ui",
