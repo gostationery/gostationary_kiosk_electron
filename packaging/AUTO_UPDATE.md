@@ -1,6 +1,6 @@
 # Silent auto-update (GitHub Releases)
 
-The kiosk checks **GitHub Releases** on the `gostationery/gostationary_kiosk_electron` repo and installs updates in the background (no AppImage).
+The kiosk checks **GitHub Releases** on the `gostationery/gostationery_kiosk_electron` repo and installs updates in the background (no AppImage).
 
 ## Supported installs
 
@@ -15,15 +15,15 @@ The kiosk checks **GitHub Releases** on the `gostationery/gostationary_kiosk_ele
 
 ## First install (manual)
 
-Download the matching asset from the latest [GitHub Release](https://github.com/gostationery/gostationary_kiosk_electron/releases):
+Download the matching asset from the latest [GitHub Release](https://github.com/gostationery/gostationery_kiosk_electron/releases):
 
 ```bash
 # Ubuntu / Pi (64-bit) — pick the arm64 or amd64 .deb from the release page
-sudo dpkg -i "GoStationary Kiosk_1.0.0_amd64.deb"
+sudo dpkg -i "Gostationery Kiosk_1.0.0_amd64.deb"
 sudo apt-get install -f -y
 
 # Fedora — pick x86_64 or aarch64 .rpm
-sudo dnf install ./GoStationary\ Kiosk-1.0.0.x86_64.rpm
+sudo dnf install ./Gostationery\ Kiosk-1.0.0.x86_64.rpm
 ```
 
 After that, the app updates itself from GitHub when a newer tag is published.
@@ -46,11 +46,11 @@ Requires **electron-builder ≥ 26** (bundles `fpm` 1.17+, compatible with Fedor
 2. Optionally install the sudoers snippet (edit the username first):
 
    ```bash
-   sudo install -m 440 packaging/sudoers.d/gostationary-kiosk-updater /etc/sudoers.d/gostationary-kiosk-updater
+   sudo install -m 440 packaging/sudoers.d/gostationery-kiosk-updater /etc/sudoers.d/gostationery-kiosk-updater
    sudo visudo -c
    ```
 
-3. Updater logs: `~/.config/gostationary-kiosk/logs/updater.log` (path may vary slightly by distro).
+3. Updater logs: `~/.config/gostationery-kiosk/logs/updater.log` (path may vary slightly by distro).
 
 ## Local testing
 

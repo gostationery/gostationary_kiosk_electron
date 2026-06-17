@@ -1,4 +1,4 @@
 # Optional: passwordless .deb updates for a dedicated kiosk user (Ubuntu / Raspberry Pi OS).
-# Install: sudo install -m 440 packaging/sudoers.d/gostationary-kiosk-updater /etc/sudoers.d/
+# Install: sudo install -m 440 packaging/sudoers.d/gostationery-kiosk-updater /etc/sudoers.d/
 # Replace "kiosk" with your kiosk login name.
 kiosk ALL=(root) NOPASSWD: /usr/bin/dpkg -i /tmp/electron-updater-*

@@ -1,5 +1,5 @@
 /**
- * main.js – GoStationary Kiosk Electron main process
+ * main.js – Gostationery Kiosk Electron main process
  *
  * Flow:
  *  1. On first launch → show setup.html (enter org_domain + machine_serial)
@@ -20,6 +20,7 @@ const path = require('path')
 const fs = require('fs')
 const { createKioskStaticServer, KIOSK_UI_DIR } = require('./kiosk-static-server')
 const { initAutoUpdater } = require('./auto-updater')
+const { startPrinterMonitor, stopPrinterMonitor, reportPrintJobResult, queryPrinterStatusOnDemand } = require('./printer-monitor')
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000'
 const KIOSK_STATIC_PORT_PREFERRED = 47831
@@ -40,7 +41,7 @@ const kioskFileLog = getKioskFileLogger()
 
 function mainLog(message, detail) {
   const line = detail ? `${message} ${JSON.stringify(detail)}` : message
-  console.log(`[GoStationary Kiosk] ${line}`)
+  console.log(`[Gostationery Kiosk] ${line}`)
   kioskFileLog?.info(line)
 }
 
@@ -74,8 +75,8 @@ function attachKioskWebLogging(win) {
   wc.on('console-message', (_event, level, message, line, sourceId) => {
     const text = String(message ?? '')
     if (
-      text.includes('[GoStationary Kiosk UI]') ||
-      text.includes('[GoStationary Kiosk]') ||
+      text.includes('[Gostationery Kiosk UI]') ||
+      text.includes('[Gostationery Kiosk]') ||
       level >= 2
     ) {
       mainLog('renderer-console', {
@@ -100,7 +101,7 @@ function loadConfig() {
     if (fs.existsSync(CONFIG_PATH)) {
       return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
     }
-  } catch {}
+  } catch { }
   return null
 }
 
@@ -112,7 +113,7 @@ function saveConfig(cfg) {
 function clearConfigFile() {
   try {
     fs.unlinkSync(CONFIG_PATH)
-  } catch {}
+  } catch { }
 }
 
 /** Remove pairing only; keep printerName + openAtLogin so kiosk staff shortcuts do not wipe device prefs. */
@@ -124,6 +125,7 @@ function clearMachinePairing() {
   if (prev?.backendUrl) next.backendUrl = prev.backendUrl
   clearConfigFile()
   if (Object.keys(next).length) saveConfig(next)
+  try { stopPrinterMonitor(); } catch (err) {}
 }
 
 /** @type {{ port: number, host: string, origin: string } | null} */
@@ -165,7 +167,7 @@ function applyOpenAtLoginFromConfig(cfg) {
   try {
     app.setLoginItemSettings({ openAtLogin: open })
   } catch (err) {
-    console.error('[GoStationary Kiosk] setLoginItemSettings:', err)
+    console.error('[Gostationery Kiosk] setLoginItemSettings:', err)
   }
 }
 
@@ -326,7 +328,7 @@ function testPrintHtml() {
     .rule-solid { border-top: 2px solid #000; margin: 8px 0; height: 0; }
   </style></head><body>
     <p class="center label">TEST PRINT — not a sale</p>
-    <h1>GoStationary</h1>
+    <h1>Gostationery</h1>
     <p class="center" style="font-weight:800;">Receipt Printer Diagnostic</p>
     <p class="center" style="font-weight:800;">GSTIN 27ABCDE1234F1Z5</p>
     <div class="rule-solid"></div>
@@ -373,7 +375,7 @@ function pruneTokenPrintJobs() {
 
 function enqueuePrint(task) {
   const run = printChain.then(() => task())
-  printChain = run.catch(() => {})
+  printChain = run.catch(() => { })
   return run
 }
 
@@ -440,12 +442,12 @@ async function printReceiptSlip(meta = {}) {
     pruneTokenPrintJobs()
     const job = tokenPrintJobs.get(jobId)
     if (!job || !job.expected.has(slipId)) {
-      console.error('[GoStationary Kiosk] print-slip: slip not in job manifest', jobId, slipId)
+      console.error('[Gostationery Kiosk] print-slip: slip not in job manifest', jobId, slipId)
       return { success: false, errorType: 'slip-not-in-manifest', slipId }
     }
     const domOk = await waitForSlipDom(mainWindow.webContents, slipId)
     if (!domOk) {
-      console.error('[GoStationary Kiosk] print-slip: DOM slip mismatch', slipId)
+      console.error('[Gostationery Kiosk] print-slip: DOM slip mismatch', slipId)
       return { success: false, errorType: 'dom-slip-mismatch', slipId }
     }
   }
@@ -457,7 +459,13 @@ async function printReceiptSlip(meta = {}) {
     const job = tokenPrintJobs.get(jobId)
     if (job) job.printed.add(slipId)
   } else if (!result.success) {
-    console.error('[GoStationary Kiosk] Print failed:', result.errorType, slipId || '')
+    console.error('[Gostationery Kiosk] Print failed:', result.errorType, slipId || '')
+  }
+
+  try {
+    reportPrintJobResult(result.success, result.success ? null : result.errorType)
+  } catch (err) {
+    console.error('[Gostationery Kiosk] Failed to report print result to monitor:', err)
   }
 
   return { ...result, slipId: slipId || undefined }
@@ -498,6 +506,24 @@ function createWindow() {
   mainWindow.setMenuBarVisibility(false)
   attachKioskWebLogging(mainWindow)
 
+  // Explicitly support Ctrl/Cmd + (+ / - / 0) zoom shortcuts
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && (input.control || input.meta)) {
+      if (input.key === '=' || input.key === '+') {
+        const current = mainWindow.webContents.getZoomLevel()
+        mainWindow.webContents.setZoomLevel(current + 0.5)
+        event.preventDefault()
+      } else if (input.key === '-') {
+        const current = mainWindow.webContents.getZoomLevel()
+        mainWindow.webContents.setZoomLevel(current - 0.5)
+        event.preventDefault()
+      } else if (input.key === '0') {
+        mainWindow.webContents.setZoomLevel(0)
+        event.preventDefault()
+      }
+    }
+  })
+
   const cfg = loadConfig()
   if (cfg?.domain && cfg?.serial) {
     const url = kioskURL(cfg)
@@ -507,6 +533,11 @@ function createWindow() {
       serial: cfg.serial,
       backendUrl: cfg.backendUrl || DEFAULT_BACKEND_URL,
     })
+    try {
+      startPrinterMonitor(cfg, mainLog)
+    } catch (err) {
+      console.error('[Gostationery Kiosk] Failed to start printer monitor:', err)
+    }
     mainWindow.loadURL(url)
   } else {
     const setupPath = path.join(__dirname, 'setup.html')
@@ -521,7 +552,7 @@ app.whenReady().then(async () => {
   try {
     await startKioskStaticServer()
   } catch (err) {
-    console.error('[GoStationary Kiosk] Failed to start UI server:', err)
+    console.error('[Gostationery Kiosk] Failed to start UI server:', err)
     app.quit()
     return
   }
@@ -545,6 +576,7 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  try { stopPrinterMonitor(); } catch (err) {}
   if (kioskStaticServer?.close) {
     void kioskStaticServer.close()
   }
@@ -570,6 +602,11 @@ ipcMain.handle('save-config', (_event, cfg) => {
   }
   saveConfig(merged)
   applyOpenAtLoginFromConfig(merged)
+  try {
+    startPrinterMonitor(merged, mainLog)
+  } catch (err) {
+    console.error('[Gostationery Kiosk] Failed to start printer monitor on save:', err)
+  }
   const url = kioskURL(merged)
   mainLog('setup saved — launching kiosk', {
     url,
@@ -583,6 +620,46 @@ ipcMain.handle('save-config', (_event, cfg) => {
 ipcMain.handle('get-printers', async () => {
   if (!mainWindow?.webContents) return []
   return mainWindow.webContents.getPrintersAsync()
+})
+
+ipcMain.handle('query-printer-status', async (_event, printerName) => {
+  if (!mainWindow?.webContents) return 'UNKNOWN'
+  try {
+    const printers = await mainWindow.webContents.getPrintersAsync()
+    let resolvedName = printerName || ''
+    if (resolvedName && !printers.some((p) => p.name === resolvedName)) {
+      resolvedName = ''
+    }
+    if (!resolvedName) {
+      resolvedName = pickPhysicalPrinter(printers)?.name || ''
+    }
+
+    if (!resolvedName) {
+      return 'NOT_SUPPORTED'
+    }
+
+    const isPhysical = printers.some((p) => {
+      if (p.name !== resolvedName) return false
+      const n = p.name.toLowerCase()
+      return (
+        !n.includes('pdf') &&
+        !n.includes('xps') &&
+        !n.includes('microsoft') &&
+        !n.includes('onenote') &&
+        !n.includes('fax') &&
+        !n.includes('send to') &&
+        !n.includes('adobe')
+      )
+    })
+
+    if (!isPhysical) {
+      return 'NOT_SUPPORTED'
+    }
+
+    return queryPrinterStatusOnDemand()
+  } catch (err) {
+    return 'UNKNOWN'
+  }
 })
 
 ipcMain.handle('get-kiosk-prefs', () => {
@@ -620,7 +697,7 @@ ipcMain.handle('test-print', async (_event, deviceNameArg) => {
     deviceName = pickPhysicalPrinter(printers)?.name || ''
   }
 
-  const testPrintPath = path.join(app.getPath('temp'), 'gostationary-test-print.html')
+  const testPrintPath = path.join(app.getPath('temp'), 'gostationery-test-print.html')
 
   try {
     fs.writeFileSync(testPrintPath, testPrintHtml(), 'utf8')
@@ -637,7 +714,7 @@ ipcMain.handle('test-print', async (_event, deviceNameArg) => {
       settled = true
       try {
         if (!win.isDestroyed()) win.close()
-      } catch (_) {}
+      } catch (_) { }
       resolve(result)
     }
 
@@ -652,7 +729,7 @@ ipcMain.handle('test-print', async (_event, deviceNameArg) => {
 
     win.loadFile(testPrintPath)
     win.webContents.once('did-finish-load', () => {
-      ;(async () => {
+      ; (async () => {
         try {
           await ensureOffscreenPaint(win)
           mainLog('test-print', {
@@ -721,3 +798,66 @@ ipcMain.handle('print-slip', (_event, meta) =>
 ipcMain.handle('silent-print', () =>
   enqueuePrint(() => printReceiptSlip({})),
 )
+
+/**
+ * print-html: Accept a complete HTML string, write to a temp file,
+ * load in an offscreen window, and print silently — same pattern as test-print.
+ */
+ipcMain.handle('print-html', async (_event, htmlContent) => {
+  const html = String(htmlContent ?? '')
+  if (!html) return { success: false, errorType: 'empty-html' }
+
+  const cfg = loadConfig()
+  let deviceName = cfg?.printerName || ''
+  if (!deviceName && mainWindow?.webContents) {
+    const printers = await mainWindow.webContents.getPrintersAsync()
+    deviceName = pickPhysicalPrinter(printers)?.name || ''
+  }
+
+  const tmpPath = path.join(app.getPath('temp'), 'gostationery-form-receipt.html')
+  try {
+    fs.writeFileSync(tmpPath, html, 'utf8')
+  } catch (err) {
+    return { success: false, errorType: `write-html:${err?.message || err}` }
+  }
+
+  return new Promise((resolve) => {
+    const win = createOffscreenPrintWindow()
+    let settled = false
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      try { if (!win.isDestroyed()) win.close() } catch (_) { }
+      resolve(result)
+    }
+    const timeout = setTimeout(() => {
+      finish({ success: false, errorType: 'form-receipt-print-timeout' })
+    }, 20000)
+
+    win.webContents.once('did-fail-load', (_e, code, desc) => {
+      clearTimeout(timeout)
+      finish({ success: false, errorType: `load-failed:${code}:${desc}` })
+    })
+
+    win.loadFile(tmpPath)
+    win.webContents.once('did-finish-load', () => {
+      ;(async () => {
+        try {
+          await ensureOffscreenPaint(win)
+          // Extra settle time for dynamic form content (variable rows, rupee symbol font rendering)
+          await sleep(250)
+          win.webContents.print(
+            receiptPrintOptions(deviceName, { printBackground: true }),
+            (success, errorType) => {
+              clearTimeout(timeout)
+              finish({ success: Boolean(success), errorType: success ? undefined : errorType })
+            },
+          )
+        } catch (err) {
+          clearTimeout(timeout)
+          finish({ success: false, errorType: String(err?.message || err) })
+        }
+      })()
+    })
+  })
+})

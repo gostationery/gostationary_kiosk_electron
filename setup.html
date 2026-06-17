@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GoStationary Kiosk – Setup</title>
+  <title>Gostationery Kiosk – Setup</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -177,6 +177,74 @@
       margin-top: 20px;
       line-height: 1.5;
     }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1;
+      transition: all 0.2s ease;
+    }
+    .badge::before {
+      content: '';
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+    .badge-ready {
+      background-color: #def7ec;
+      color: #03543f;
+    }
+    .badge-ready::before {
+      background-color: #31c48d;
+    }
+    .badge-cover-open {
+      background-color: #fde8e8;
+      color: #9b1c1c;
+    }
+    .badge-cover-open::before {
+      background-color: #f98080;
+    }
+    .badge-paper-out {
+      background-color: #fde8e8;
+      color: #9b1c1c;
+    }
+    .badge-paper-out::before {
+      background-color: #f98080;
+    }
+    .badge-near-end {
+      background-color: #fef3c7;
+      color: #92400e;
+    }
+    .badge-near-end::before {
+      background-color: #f59e0b;
+    }
+    .badge-off {
+      background-color: #f3f4f6;
+      color: #374151;
+    }
+    .badge-off::before {
+      background-color: #9ca3af;
+    }
+    .badge-unknown {
+      background-color: #f3f4f6;
+      color: #374151;
+    }
+    .badge-unknown::before {
+      background-color: #9ca3af;
+    }
+    .badge-not-supported {
+      background-color: #edf2f7;
+      color: #4a5568;
+    }
+    .badge-not-supported::before {
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -185,7 +253,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="#2b6cb0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
       </svg>
-      <h1>GoStationary Kiosk</h1>
+      <h1>Gostationery Kiosk</h1>
       <p>Configure this machine, receipt printer, and startup behaviour</p>
     </div>
 
@@ -229,7 +297,7 @@
           autocomplete="off"
           spellcheck="false"
         />
-        <p class="hint">GoStationary kiosk backend (local or LAN). The kiosk UI talks to this server directly.</p>
+        <p class="hint">Gostationery kiosk backend (local or LAN). The kiosk UI talks to this server directly.</p>
       </div>
 
       <p class="section-title">Receipt printer</p>
@@ -239,6 +307,10 @@
         <select id="printer" aria-label="Select printer">
           <option value="">Loading printers…</option>
         </select>
+        <div id="printer-status-container" style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+          <span style="font-size: 13px; font-weight: 600; color: #4a5568;">Status:</span>
+          <span id="printer-status-badge" class="badge badge-unknown">Checking status...</span>
+        </div>
         <p class="hint">Choose the thermal or receipt printer. “Automatic” picks the first non-PDF printer.</p>
         <div class="row-actions">
           <button type="button" class="btn-secondary" id="refresh-printers">Refresh list</button>
@@ -284,6 +356,47 @@
     const btn = document.getElementById('submit-btn')
     const printerSelect = document.getElementById('printer')
     const openAtLoginEl = document.getElementById('open-at-login')
+    const printerStatusBadge = document.getElementById('printer-status-badge')
+    let statusInterval = null
+
+    async function checkPrinterStatus() {
+      if (!window.electronAPI?.queryPrinterStatus) return
+      try {
+        const status = await window.electronAPI.queryPrinterStatus(printerSelect.value || '')
+        printerStatusBadge.className = 'badge'
+        if (status === 'READY') {
+          printerStatusBadge.classList.add('badge-ready')
+          printerStatusBadge.textContent = 'Ready'
+        } else if (status === 'COVER_OPEN') {
+          printerStatusBadge.classList.add('badge-cover-open')
+          printerStatusBadge.textContent = 'Cover Open'
+        } else if (status === 'PAPER_OUT') {
+          printerStatusBadge.classList.add('badge-paper-out')
+          printerStatusBadge.textContent = 'Paper Out'
+        } else if (status === 'NEAR_END') {
+          printerStatusBadge.classList.add('badge-near-end')
+          printerStatusBadge.textContent = 'Low Paper'
+        } else if (status === 'OFF') {
+          printerStatusBadge.classList.add('badge-off')
+          printerStatusBadge.textContent = 'Offline'
+        } else if (status === 'NOT_SUPPORTED') {
+          printerStatusBadge.classList.add('badge-not-supported')
+          printerStatusBadge.textContent = 'Not Supported'
+        } else {
+          printerStatusBadge.classList.add('badge-unknown')
+          printerStatusBadge.textContent = 'Unknown'
+        }
+      } catch (e) {
+        printerStatusBadge.className = 'badge badge-unknown'
+        printerStatusBadge.textContent = 'Error'
+      }
+    }
+
+    function startStatusPolling() {
+      if (statusInterval) clearInterval(statusInterval)
+      void checkPrinterStatus()
+      statusInterval = setInterval(checkPrinterStatus, 3000)
+    }
 
     function printerLabel(p) {
       const d = (p.displayName || '').trim()
@@ -336,6 +449,7 @@
       try {
         await api.setPrinter(printerSelect.value || '')
       } catch (_) {}
+      void checkPrinterStatus()
     })
 
     openAtLoginEl.addEventListener('change', async () => {
@@ -384,6 +498,7 @@
         backendEl.value = 'http://127.0.0.1:8000'
       }
       await refreshPrinters()
+      startStatusPolling()
     })
 
     form.addEventListener('submit', async (e) => {

@@ -1,4 +1,4 @@
 # Local testing only — matches package.json "publish" (see electron-builder auto-update docs).
 owner: gostationery
-repo: gostationary_kiosk_electron
+repo: gostationery_kiosk_electron
 provider: github
