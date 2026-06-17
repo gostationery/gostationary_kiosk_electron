@@ -193,6 +193,46 @@ function sendUpdateToBackend(status, printed, failed, lastError = null) {
   }
 }
 
+function sendPrinterStatusLog(eventType, message = '') {
+  if (!appConfig || !appConfig.domain || !appConfig.serial) return;
+
+  const backendUrl = appConfig.backendUrl || 'http://127.0.0.1:8000';
+  const domain = encodeURIComponent(appConfig.domain);
+  const serial = encodeURIComponent(appConfig.serial);
+  const urlString = `${backendUrl}/public/org/${domain}/machines/${serial}/printer-status-log`;
+
+  try {
+    const parsedUrl = new URL(urlString);
+    const postData = JSON.stringify({ event_type: eventType, message });
+    const options = {
+      hostname: parsedUrl.hostname,
+      port: parsedUrl.port,
+      path: parsedUrl.pathname + parsedUrl.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    };
+    const reqLib = parsedUrl.protocol === 'https:' ? https : http;
+    const req = reqLib.request(options, (res) => {
+      res.on('data', () => {});
+      res.on('end', () => {
+        if (res.statusCode >= 400) {
+          mainLog(`[Printer Monitor] Failed to log printer status event (${eventType}):`, res.statusCode);
+        }
+      });
+    });
+    req.on('error', (err) => {
+      mainLog(`[Printer Monitor] Error logging printer status event (${eventType}):`, err.message || err);
+    });
+    req.write(postData);
+    req.end();
+  } catch (err) {
+    mainLog('[Printer Monitor] Invalid URL for printer status log:', err.message || err);
+  }
+}
+
 function sendPrintJobLog(success, errorMsg = null) {
   if (!appConfig || !appConfig.domain || !appConfig.serial) return;
 
@@ -297,6 +337,20 @@ function startPrinterMonitor(config, loggerFn) {
 
     if (statusChanged) {
       mainLog(`[Printer Monitor] Status changed from ${lastStatus} to ${currentStatus}`);
+
+      // Log meaningful state transitions
+      if (currentStatus === 'OFF' && lastStatus !== 'UNKNOWN') {
+        sendPrinterStatusLog('PRINTER_OFFLINE', `Was ${lastStatus}`);
+      } else if (lastStatus === 'OFF' && currentStatus !== 'OFF') {
+        sendPrinterStatusLog('PRINTER_ONLINE', `Now ${currentStatus}`);
+      } else if (currentStatus === 'COVER_OPEN') {
+        sendPrinterStatusLog('COVER_OPEN', 'Printer cover was opened');
+      } else if (currentStatus === 'NEAR_END') {
+        sendPrinterStatusLog('PAPER_LOW', 'Paper level is low');
+      } else if (currentStatus === 'READY' && (lastStatus === 'NEAR_END' || lastStatus === 'PAPER_OUT')) {
+        sendPrinterStatusLog('PAPER_REFILLED', 'Paper refilled, printer ready');
+      }
+
       lastStatus = currentStatus;
       lastHeartbeatAt = Date.now();
       sendUpdateToBackend(currentStatus, stats.printed, stats.failed);
