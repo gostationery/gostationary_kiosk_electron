@@ -244,10 +244,10 @@ function receiptPrintOptions(deviceName, overrides = {}) {
   }
 }
 
-function printWebContents(webContents, deviceName) {
+function printWebContents(webContents, deviceName, overrides = {}) {
   return new Promise((resolve) => {
     setTimeout(() => {
-      webContents.print(receiptPrintOptions(deviceName), (success, errorType) => {
+      webContents.print(receiptPrintOptions(deviceName, overrides), (success, errorType) => {
         resolve({
           success: Boolean(success),
           errorType: success ? undefined : errorType,
