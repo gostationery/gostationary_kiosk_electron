@@ -395,10 +395,24 @@ function reportPrintJobResult(success, errorMsg = null) {
   sendUpdateToBackend(status, stats.printed, stats.failed, errorMsg);
 }
 
-function queryPrinterStatusOnDemand() {
-  // If the background monitor is running, return its real-time status directly
-  if (monitorIntervalId) {
+/**
+ * @param {boolean} [forceRefresh] - When true, always do a live DLL query even if the
+ *   background monitor is running.  Use this for post-print verification so a paper-out
+ *   that occurred *during* the print job is detected before the 5-second poll fires.
+ */
+function queryPrinterStatusOnDemand(forceRefresh = false) {
+  // If the background monitor is running, return its cached status —
+  // UNLESS the caller needs a guaranteed fresh reading (e.g. post-print check).
+  if (monitorIntervalId && !forceRefresh) {
     return currentStatus;
+  }
+
+  // If we have an active DLL connection we can query it directly.
+  if (monitorIntervalId && forceRefresh && Pos_QueryStstus && printerConnected) {
+    const fresh = getPrinterStatus();
+    // Keep the cached status in sync so the background loop sees the update.
+    currentStatus = fresh;
+    return fresh;
   }
 
   if (process.platform !== 'win32') {

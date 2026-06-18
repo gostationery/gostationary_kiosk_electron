@@ -452,8 +452,26 @@ async function printReceiptSlip(meta = {}) {
     }
   }
 
+  // Force a live status query before printing to avoid spooling when already in error state
+  const printerStatus = queryPrinterStatusOnDemand(true)
+  if (printerStatus === 'PAPER_OUT' || printerStatus === 'COVER_OPEN' || printerStatus === 'OFF') {
+    console.error('[Gostationery Kiosk] Print aborted: printer hardware error', printerStatus)
+    return { success: false, errorType: `printer-${printerStatus.toLowerCase()}`, slipId: meta.slipId || undefined }
+  }
+
   const deviceName = await resolvePrinterDeviceName()
-  const result = await printWebContents(mainWindow.webContents, deviceName)
+  let result = await printWebContents(mainWindow.webContents, deviceName)
+
+  // Wait 800ms for physical print/feed to complete and status registers to update
+  await new Promise((resolve) => setTimeout(resolve, 800))
+
+  // Force a fresh DLL query — the background poll fires every 5 seconds, so if paper
+  // ran out *during* this print job the cached status might still say READY/NEAR_END.
+  const printerStatusAfter = queryPrinterStatusOnDemand(true)
+  if (result.success && (printerStatusAfter === 'PAPER_OUT' || printerStatusAfter === 'COVER_OPEN' || printerStatusAfter === 'OFF')) {
+    result.success = false
+    result.errorType = `printer-${printerStatusAfter.toLowerCase()}`
+  }
 
   if (result.success && jobId && slipId) {
     const job = tokenPrintJobs.get(jobId)
