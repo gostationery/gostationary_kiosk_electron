@@ -245,6 +245,53 @@
     .badge-not-supported::before {
       display: none;
     }
+
+    .printer-info-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      margin-top: 8px;
+    }
+    .printer-info-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .printer-info-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #4a5568;
+      width: 54px;
+      flex-shrink: 0;
+    }
+
+    /* Paper level bar */
+    .paper-bar-track {
+      width: 80px;
+      height: 9px;
+      background: #e2e8f0;
+      border-radius: 5px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .paper-bar-fill {
+      height: 100%;
+      border-radius: 5px;
+      transition: width 0.45s ease, background-color 0.3s ease;
+    }
+    .paper-bar-fill.level-ok    { background-color: #31c48d; }
+    .paper-bar-fill.level-low   { background-color: #f59e0b; }
+    .paper-bar-fill.level-empty { background-color: #f98080; }
+    .paper-bar-fill.level-unknown { background-color: #cbd5e0; }
+
+    .paper-level-text {
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .paper-level-text.level-ok    { color: #03543f; }
+    .paper-level-text.level-low   { color: #92400e; }
+    .paper-level-text.level-empty { color: #9b1c1c; }
+    .paper-level-text.level-unknown { color: #718096; }
   </style>
 </head>
 <body>
@@ -307,9 +354,18 @@
         <select id="printer" aria-label="Select printer">
           <option value="">Loading printers…</option>
         </select>
-        <div id="printer-status-container" style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 13px; font-weight: 600; color: #4a5568;">Status:</span>
-          <span id="printer-status-badge" class="badge badge-unknown">Checking status...</span>
+        <div class="printer-info-grid">
+          <div class="printer-info-row">
+            <span class="printer-info-label">Status</span>
+            <span id="printer-status-badge" class="badge badge-unknown">Checking…</span>
+          </div>
+          <div class="printer-info-row">
+            <span class="printer-info-label">Paper</span>
+            <div class="paper-bar-track">
+              <div id="paper-bar-fill" class="paper-bar-fill level-unknown" style="width: 40%;"></div>
+            </div>
+            <span id="paper-level-text" class="paper-level-text level-unknown">—</span>
+          </div>
         </div>
         <p class="hint">Choose the thermal or receipt printer. “Automatic” picks the first non-PDF printer.</p>
         <div class="row-actions">
@@ -357,7 +413,16 @@
     const printerSelect = document.getElementById('printer')
     const openAtLoginEl = document.getElementById('open-at-login')
     const printerStatusBadge = document.getElementById('printer-status-badge')
+    const paperBarFill       = document.getElementById('paper-bar-fill')
+    const paperLevelText     = document.getElementById('paper-level-text')
     let statusInterval = null
+
+    function setPaperLevel(level, widthPct, label) {
+      paperBarFill.className = `paper-bar-fill level-${level}`
+      paperBarFill.style.width = widthPct + '%'
+      paperLevelText.className = `paper-level-text level-${level}`
+      paperLevelText.textContent = label
+    }
 
     async function checkPrinterStatus() {
       if (!window.electronAPI?.queryPrinterStatus) return
@@ -367,28 +432,36 @@
         if (status === 'READY') {
           printerStatusBadge.classList.add('badge-ready')
           printerStatusBadge.textContent = 'Ready'
-        } else if (status === 'COVER_OPEN') {
-          printerStatusBadge.classList.add('badge-cover-open')
-          printerStatusBadge.textContent = 'Cover Open'
-        } else if (status === 'PAPER_OUT') {
-          printerStatusBadge.classList.add('badge-paper-out')
-          printerStatusBadge.textContent = 'Paper Out'
+          setPaperLevel('ok', 92, 'OK')
         } else if (status === 'NEAR_END') {
           printerStatusBadge.classList.add('badge-near-end')
           printerStatusBadge.textContent = 'Low Paper'
+          setPaperLevel('low', 18, 'Low')
+        } else if (status === 'PAPER_OUT') {
+          printerStatusBadge.classList.add('badge-paper-out')
+          printerStatusBadge.textContent = 'Paper Out'
+          setPaperLevel('empty', 0, 'Empty')
+        } else if (status === 'COVER_OPEN') {
+          printerStatusBadge.classList.add('badge-cover-open')
+          printerStatusBadge.textContent = 'Cover Open'
+          setPaperLevel('unknown', 40, '—')
         } else if (status === 'OFF') {
           printerStatusBadge.classList.add('badge-off')
           printerStatusBadge.textContent = 'Offline'
+          setPaperLevel('unknown', 40, '—')
         } else if (status === 'NOT_SUPPORTED') {
           printerStatusBadge.classList.add('badge-not-supported')
           printerStatusBadge.textContent = 'Not Supported'
+          setPaperLevel('unknown', 40, '—')
         } else {
           printerStatusBadge.classList.add('badge-unknown')
           printerStatusBadge.textContent = 'Unknown'
+          setPaperLevel('unknown', 40, '—')
         }
       } catch (e) {
         printerStatusBadge.className = 'badge badge-unknown'
         printerStatusBadge.textContent = 'Error'
+        setPaperLevel('unknown', 40, '—')
       }
     }
 

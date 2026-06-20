@@ -674,7 +674,9 @@ ipcMain.handle('query-printer-status', async (_event, printerName) => {
       return 'NOT_SUPPORTED'
     }
 
-    return queryPrinterStatusOnDemand()
+    // Query the specifically-selected printer so the setup badge tracks the
+    // dropdown, not just whichever printer the background monitor is watching.
+    return queryPrinterStatusOnDemand(false, resolvedName)
   } catch (err) {
     return 'UNKNOWN'
   }

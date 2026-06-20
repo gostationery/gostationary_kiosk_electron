@@ -31,12 +31,16 @@
     "directories": {
       "output": "dist"
     },
+    "asarUnpack": [
+      "assets/**"
+    ],
     "files": [
       "main.js",
       "auto-updater.js",
       "preload.js",
       "setup.html",
       "kiosk-static-server.js",
+      "printer-monitor.js",
       "kiosk-ui/**",
       "assets/**"
     ],
