@@ -1,16 +1,16 @@
 {
   "name": "gostationary-kiosk",
   "productName": "gostationary-kiosk",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "GoStationary Kiosk Desktop App – wraps the kiosk web UI with silent printing",
   "homepage": "https://www.gostationary.in",
   "author": {
-    "name": "GoStationary",
-    "email": "support@gostationary.com"
+    "name": "Gostationery",
+    "email": "support@gostationery.com"
   },
   "main": "main.js",
   "scripts": {
-    "build:kiosk-ui": "cd ../gostationary_kiosk_frontend && pnpm run build:electron",
+    "build:kiosk-ui": "cd ../gostationary_kiosk_frontend && npm run build:electron",
     "sync:kiosk-ui": "node scripts/sync-kiosk-ui.js",
     "prepare:kiosk": "npm run build:kiosk-ui && npm run sync:kiosk-ui",
     "prestart": "npm run sync:kiosk-ui",
@@ -24,19 +24,23 @@
     "build:all": "electron-builder -mwl"
   },
   "build": {
-    "appId": "com.gostationary.kiosk",
-    "productName": "gostationary-kiosk",
-    "copyright": "Copyright © 2026 GoStationary",
+    "appId": "com.gostationery.kiosk",
+    "productName": "gostationery-kiosk",
+    "copyright": "Copyright © 2026 Gostationery",
     "electronUpdaterCompatibility": ">=2.16",
     "directories": {
       "output": "dist"
     },
+    "asarUnpack": [
+      "assets/**"
+    ],
     "files": [
       "main.js",
       "auto-updater.js",
       "preload.js",
       "setup.html",
       "kiosk-static-server.js",
+      "printer-monitor.js",
       "kiosk-ui/**",
       "assets/**"
     ],
@@ -72,10 +76,10 @@
     "linux": {
       "icon": "assets/icon.png",
       "category": "Office",
-      "maintainer": "GoStationary <support@gostationary.com>",
-      "executableName": "gostationary-kiosk",
-      "synopsis": "GoStationary fullscreen kiosk with silent receipt printing",
-      "description": "GoStationary Kiosk desktop app for Ubuntu, Fedora, and Raspberry Pi (64-bit).",
+      "maintainer": "Gostationery <support@gostationery.com>",
+      "executableName": "gostationery-kiosk",
+      "synopsis": "Gostationery fullscreen kiosk with silent receipt printing",
+      "description": "Gostationery Kiosk desktop app for Ubuntu, Fedora, and Raspberry Pi (64-bit).",
       "target": [
         {
           "target": "deb",
@@ -94,7 +98,7 @@
       ],
       "desktop": {
         "entry": {
-          "Name": "GoStationary Kiosk",
+          "Name": "Gostationery Kiosk",
           "StartupNotify": "false",
           "Terminal": "false"
         }
@@ -131,13 +135,14 @@
     "publish": {
       "provider": "github",
       "owner": "gostationery",
-      "repo": "gostationary_kiosk_electron",
+      "repo": "gostationery_kiosk_electron",
       "releaseType": "release"
     }
   },
   "dependencies": {
     "electron-log": "^5.4.4",
-    "electron-updater": "^6.8.3"
+    "electron-updater": "^6.8.3",
+    "koffi": "^3.0.2"
   },
   "devDependencies": {
     "electron": "^33.0.0",

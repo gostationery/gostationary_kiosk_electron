@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Copies gostationary_kiosk_frontend/dist → gostationary_kiosk_electron/kiosk-ui
+ * Copies gostationery_kiosk_frontend/dist → gostationery_kiosk_electron/kiosk-ui
  * Builds the frontend first when dist/ is missing.
  */
 

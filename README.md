@@ -1,14 +1,14 @@
 
-# GoStationary Kiosk – Desktop App
+# Gostationery Kiosk – Desktop App
 
-Electron wrapper for the GoStationary kiosk web frontend. Runs in fullscreen kiosk mode and prints bills **silently** to the first physical printer found (no print-dialog, no "Save as PDF").
+Electron wrapper for the Gostationery kiosk web frontend. Runs in fullscreen kiosk mode and prints bills **silently** to the first physical printer found (no print-dialog, no "Save as PDF").
 
 ---
 
 ## Quick Start (Development)
 
 ```bash
-cd gostationary_kiosk_electron
+cd gostationery_kiosk_electron
 npm install
 npm start
 ```
@@ -19,7 +19,7 @@ The app serves the **same kiosk UI** as the web app from a local bundle and talk
 Before first run (or after frontend changes), bundle the UI into the app:
 
 ```bash
-cd gostationary_kiosk_electron
+cd gostationery_kiosk_electron
 npm run prepare:kiosk   # builds frontend + copies dist → kiosk-ui/
 npm start
 ```
@@ -44,8 +44,8 @@ npm install
 
 | Platform | Command | Output |
 |---|---|---|
-| macOS | `npm run build:mac` | `dist/GoStationary Kiosk-*.dmg` |
-| Windows | `npm run build:win` | `dist/GoStationary Kiosk Setup *.exe` |
+| macOS | `npm run build:mac` | `dist/Gostationery Kiosk-*.dmg` |
+| Windows | `npm run build:win` | `dist/Gostationery Kiosk Setup *.exe` |
 | Linux | `npm run build:linux` | `dist/*.deb` and `dist/*.rpm` (x64 + arm64) |
 | All three | `npm run build:all` | All of the above |
 
@@ -96,6 +96,6 @@ Installed `.deb` / `.rpm` builds check GitHub for new versions and download upda
 
 ## GitHub Releases (for public downloads)
 
-1. Repo: [gostationery/gostationary_kiosk_electron](https://github.com/gostationery/gostationary_kiosk_electron).
+1. Repo: [gostationery/gostationery_kiosk_electron](https://github.com/gostationery/gostationery_kiosk_electron).
 2. Tag push triggers CI (`.github/workflows/release.yml`).
 3. Point landing-page Linux downloads at the `.deb` / `.rpm` assets for the user’s CPU (amd64 vs arm64).

@@ -29,9 +29,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   setOpenAtLogin: (open) => ipcRenderer.invoke('set-open-at-login', open),
 
+  /** Query printer status from backend DLL */
+  queryPrinterStatus: (printerName) => ipcRenderer.invoke('query-printer-status', printerName),
+
   /** Optional deviceName; falls back to saved or first physical printer */
   testPrint: (deviceName) => ipcRenderer.invoke('test-print', deviceName),
 
   /** Kiosk UI: activity ping so idle hard-refresh does not interrupt checkout */
   notifyKioskActivity: () => ipcRenderer.invoke('notify-kiosk-activity'),
+
+  /** Print a complete HTML string from an offscreen window — for form receipts. */
+  printHtml: (htmlContent) => ipcRenderer.invoke('print-html', htmlContent),
 })

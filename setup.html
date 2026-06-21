@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>GoStationary Kiosk – Setup</title>
+  <title>Gostationery Kiosk – Setup</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -177,6 +177,121 @@
       margin-top: 20px;
       line-height: 1.5;
     }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1;
+      transition: all 0.2s ease;
+    }
+    .badge::before {
+      content: '';
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+    .badge-ready {
+      background-color: #def7ec;
+      color: #03543f;
+    }
+    .badge-ready::before {
+      background-color: #31c48d;
+    }
+    .badge-cover-open {
+      background-color: #fde8e8;
+      color: #9b1c1c;
+    }
+    .badge-cover-open::before {
+      background-color: #f98080;
+    }
+    .badge-paper-out {
+      background-color: #fde8e8;
+      color: #9b1c1c;
+    }
+    .badge-paper-out::before {
+      background-color: #f98080;
+    }
+    .badge-near-end {
+      background-color: #fef3c7;
+      color: #92400e;
+    }
+    .badge-near-end::before {
+      background-color: #f59e0b;
+    }
+    .badge-off {
+      background-color: #f3f4f6;
+      color: #374151;
+    }
+    .badge-off::before {
+      background-color: #9ca3af;
+    }
+    .badge-unknown {
+      background-color: #f3f4f6;
+      color: #374151;
+    }
+    .badge-unknown::before {
+      background-color: #9ca3af;
+    }
+    .badge-not-supported {
+      background-color: #edf2f7;
+      color: #4a5568;
+    }
+    .badge-not-supported::before {
+      display: none;
+    }
+
+    .printer-info-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      margin-top: 8px;
+    }
+    .printer-info-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .printer-info-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #4a5568;
+      width: 54px;
+      flex-shrink: 0;
+    }
+
+    /* Paper level bar */
+    .paper-bar-track {
+      width: 80px;
+      height: 9px;
+      background: #e2e8f0;
+      border-radius: 5px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+    .paper-bar-fill {
+      height: 100%;
+      border-radius: 5px;
+      transition: width 0.45s ease, background-color 0.3s ease;
+    }
+    .paper-bar-fill.level-ok    { background-color: #31c48d; }
+    .paper-bar-fill.level-low   { background-color: #f59e0b; }
+    .paper-bar-fill.level-empty { background-color: #f98080; }
+    .paper-bar-fill.level-unknown { background-color: #cbd5e0; }
+
+    .paper-level-text {
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .paper-level-text.level-ok    { color: #03543f; }
+    .paper-level-text.level-low   { color: #92400e; }
+    .paper-level-text.level-empty { color: #9b1c1c; }
+    .paper-level-text.level-unknown { color: #718096; }
   </style>
 </head>
 <body>
@@ -185,7 +300,7 @@
       <svg viewBox="0 0 24 24" fill="none" stroke="#2b6cb0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
       </svg>
-      <h1>GoStationary Kiosk</h1>
+      <h1>Gostationery Kiosk</h1>
       <p>Configure this machine, receipt printer, and startup behaviour</p>
     </div>
 
@@ -229,7 +344,7 @@
           autocomplete="off"
           spellcheck="false"
         />
-        <p class="hint">GoStationary kiosk backend (local or LAN). The kiosk UI talks to this server directly.</p>
+        <p class="hint">Gostationery kiosk backend (local or LAN). The kiosk UI talks to this server directly.</p>
       </div>
 
       <p class="section-title">Receipt printer</p>
@@ -239,6 +354,19 @@
         <select id="printer" aria-label="Select printer">
           <option value="">Loading printers…</option>
         </select>
+        <div class="printer-info-grid">
+          <div class="printer-info-row">
+            <span class="printer-info-label">Status</span>
+            <span id="printer-status-badge" class="badge badge-unknown">Checking…</span>
+          </div>
+          <div class="printer-info-row">
+            <span class="printer-info-label">Paper</span>
+            <div class="paper-bar-track">
+              <div id="paper-bar-fill" class="paper-bar-fill level-unknown" style="width: 40%;"></div>
+            </div>
+            <span id="paper-level-text" class="paper-level-text level-unknown">—</span>
+          </div>
+        </div>
         <p class="hint">Choose the thermal or receipt printer. “Automatic” picks the first non-PDF printer.</p>
         <div class="row-actions">
           <button type="button" class="btn-secondary" id="refresh-printers">Refresh list</button>
@@ -284,6 +412,64 @@
     const btn = document.getElementById('submit-btn')
     const printerSelect = document.getElementById('printer')
     const openAtLoginEl = document.getElementById('open-at-login')
+    const printerStatusBadge = document.getElementById('printer-status-badge')
+    const paperBarFill       = document.getElementById('paper-bar-fill')
+    const paperLevelText     = document.getElementById('paper-level-text')
+    let statusInterval = null
+
+    function setPaperLevel(level, widthPct, label) {
+      paperBarFill.className = `paper-bar-fill level-${level}`
+      paperBarFill.style.width = widthPct + '%'
+      paperLevelText.className = `paper-level-text level-${level}`
+      paperLevelText.textContent = label
+    }
+
+    async function checkPrinterStatus() {
+      if (!window.electronAPI?.queryPrinterStatus) return
+      try {
+        const status = await window.electronAPI.queryPrinterStatus(printerSelect.value || '')
+        printerStatusBadge.className = 'badge'
+        if (status === 'READY') {
+          printerStatusBadge.classList.add('badge-ready')
+          printerStatusBadge.textContent = 'Ready'
+          setPaperLevel('ok', 92, 'OK')
+        } else if (status === 'NEAR_END') {
+          printerStatusBadge.classList.add('badge-near-end')
+          printerStatusBadge.textContent = 'Low Paper'
+          setPaperLevel('low', 18, 'Low')
+        } else if (status === 'PAPER_OUT') {
+          printerStatusBadge.classList.add('badge-paper-out')
+          printerStatusBadge.textContent = 'Paper Out'
+          setPaperLevel('empty', 0, 'Empty')
+        } else if (status === 'COVER_OPEN') {
+          printerStatusBadge.classList.add('badge-cover-open')
+          printerStatusBadge.textContent = 'Cover Open'
+          setPaperLevel('unknown', 40, '—')
+        } else if (status === 'OFF') {
+          printerStatusBadge.classList.add('badge-off')
+          printerStatusBadge.textContent = 'Offline'
+          setPaperLevel('unknown', 40, '—')
+        } else if (status === 'NOT_SUPPORTED') {
+          printerStatusBadge.classList.add('badge-not-supported')
+          printerStatusBadge.textContent = 'Not Supported'
+          setPaperLevel('unknown', 40, '—')
+        } else {
+          printerStatusBadge.classList.add('badge-unknown')
+          printerStatusBadge.textContent = 'Unknown'
+          setPaperLevel('unknown', 40, '—')
+        }
+      } catch (e) {
+        printerStatusBadge.className = 'badge badge-unknown'
+        printerStatusBadge.textContent = 'Error'
+        setPaperLevel('unknown', 40, '—')
+      }
+    }
+
+    function startStatusPolling() {
+      if (statusInterval) clearInterval(statusInterval)
+      void checkPrinterStatus()
+      statusInterval = setInterval(checkPrinterStatus, 3000)
+    }
 
     function printerLabel(p) {
       const d = (p.displayName || '').trim()
@@ -336,6 +522,7 @@
       try {
         await api.setPrinter(printerSelect.value || '')
       } catch (_) {}
+      void checkPrinterStatus()
     })
 
     openAtLoginEl.addEventListener('change', async () => {
@@ -384,6 +571,7 @@
         backendEl.value = 'http://127.0.0.1:8000'
       }
       await refreshPrinters()
+      startStatusPolling()
     })
 
     form.addEventListener('submit', async (e) => {
