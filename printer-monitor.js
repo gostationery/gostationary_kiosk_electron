@@ -387,6 +387,44 @@ function connectPrinter() {
   }
 }
 
+/**
+ * Close any existing handle and open a brand-new one from the (cached) device
+ * path, leaving it as the active port. Returns true if a live handle is ready.
+ *
+ * Reusing one long-lived handle makes the CSN/POS DLL hand back buffered/stale
+ * status, so paper-out/near-end never propagate — which is exactly why the setup
+ * screen (fresh handle per query) reads correctly while the long-lived monitor
+ * stayed stuck on its first reading. We therefore reopen before every read.
+ *
+ * The resolved device path is cached, so this is a cheap local USB open with no
+ * PowerShell rescan. The monitor is single-threaded (synchronous DLL calls on the
+ * Node event loop), so this never races with another read — there is never a
+ * second *concurrent* handle to corrupt the DLL's internal active port.
+ */
+function reopenHandleFresh() {
+  if (printerHandle && Port_ClosePort) {
+    try { Port_ClosePort(printerHandle); } catch (_) {}
+    printerHandle = null;
+  }
+  printerConnected = false;
+  if (!Port_OpenUSBIO) return false;
+  const { path: devPath } = resolveDevicePath(activePrinterName);
+  if (!devPath) return false;
+  try {
+    const h = Port_OpenUSBIO(devPath);
+    if (!h) return false;
+    if (!Port_SetPort(h)) {
+      try { Port_ClosePort(h); } catch (_) {}
+      return false;
+    }
+    printerHandle = h;
+    printerConnected = true;
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function getPrinterStatus() {
   if (!Pos_QueryStstus) return 'OFF';
   try {
@@ -629,33 +667,21 @@ function startPrinterMonitor(config, loggerFn) {
     if (!hasDll) {
       const { anyPresent } = resolveDevicePath(activePrinterName);
       currentStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF';
+    } else if (reopenHandleFresh()) {
+      // Reopen a FRESH handle every poll before reading so the DLL doesn't return
+      // stale buffered status. The cached device path makes this a cheap local USB
+      // open (no PowerShell rescan) on the healthy path.
+      currentStatus = getPrinterStatus();
     } else {
-      // While disconnected, periodically drop the cache so a printer that is
-      // plugged in / swapped after startup is re-discovered (bounds the cost of
-      // the PowerShell scan to once every 15s instead of every tick).
-      if (!printerConnected && Date.now() - lastRediscoverAt >= 15_000) {
+      // No live handle: distinguish wrong-printer from nothing-connected, and
+      // periodically drop the path cache so a (re)plugged printer is rediscovered
+      // (bounded to once per 15s to cap the PowerShell scan cost).
+      if (Date.now() - lastRediscoverAt >= 15_000) {
         devicePathCache.delete(activePrinterName);
         lastRediscoverAt = Date.now();
       }
-
-      if (!printerConnected) {
-        const conn = connectPrinter();
-        currentStatus = conn === 'CONNECTED' ? getPrinterStatus() : conn;
-      } else {
-        currentStatus = getPrinterStatus();
-      }
-
-      // A previously-connected printer that drops out → reset for reconnect.
-      if (printerConnected && (currentStatus === 'OFF' || currentStatus === 'UNKNOWN' || currentStatus === 'ERROR')) {
-        mainLog(`[Printer Monitor] Connection lost (status: ${currentStatus}). Resetting handle for reconnect retry.`);
-        printerConnected = false;
-        devicePathCache.delete(activePrinterName); // re-discover in case printer was replugged to a different port
-        lastRediscoverAt = Date.now();
-        if (printerHandle && Port_ClosePort) {
-          try { Port_ClosePort(printerHandle); } catch(_){}
-          printerHandle = null;
-        }
-      }
+      const { anyPresent } = resolveDevicePath(activePrinterName);
+      currentStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF';
     }
 
     const statusChanged = currentStatus !== lastStatus;
@@ -708,15 +734,10 @@ function reportPrintJobResult(success, errorMsg = null) {
   }
   saveStatsToConfig();
   sendPrintJobLog(success, errorMsg);
-  // Immediately report job completion update to backend
-  const status = getPrinterStatus();
-  if (status === 'OFF' || status === 'UNKNOWN' || status === 'ERROR') {
-    printerConnected = false;
-    if (printerHandle && Port_ClosePort) {
-      try { Port_ClosePort(printerHandle); } catch(_){}
-      printerHandle = null;
-    }
-  }
+  // Immediately report job completion update to backend. Reopen a fresh handle so
+  // the status reflects the printer right now (a reused handle can be stale, e.g.
+  // paper that ran out on this very job).
+  const status = reopenHandleFresh() ? getPrinterStatus() : 'OFF';
   sendUpdateToBackend(status, stats.printed, stats.failed, errorMsg);
 }
 
@@ -740,10 +761,11 @@ function queryPrinterStatusOnDemand(forceRefresh = false, printerNameOverride = 
     if (!overriding) {
       // Same printer the monitor is watching.
       if (!forceRefresh) return currentStatus;
-      // Force-fresh: use the existing live handle — do NOT open a new one.
-      // Opening a second handle and calling Port_SetPort would overwrite the
-      // DLL's internal "active port" and corrupt the monitor's subsequent reads.
-      if (Pos_QueryStstus && printerConnected) {
+      // Force-fresh: reopen a brand-new handle and read. A reused handle returns
+      // stale/buffered status, so a paper-out that happened *during* a print job
+      // would be missed. Safe to reopen — the monitor is single-threaded, so this
+      // never races with the poll's own reopen (no concurrent second handle).
+      if (Pos_QueryStstus && reopenHandleFresh()) {
         const fresh = getPrinterStatus();
         currentStatus = fresh;
         return fresh;
