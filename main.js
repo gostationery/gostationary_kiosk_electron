@@ -189,7 +189,7 @@ function pickPhysicalPrinter(printers) {
 /** Fixed 80 mm × 297 mm thermal roll — microns, no DOM measurement. */
 const RECEIPT_WIDTH_MICRONS = 80000
 const RECEIPT_HEIGHT_MICRONS = 4000_000
-const PRINT_SETTLE_MS = 300
+const PRINT_SETTLE_MS = 80
 const TEST_PRINT_WINDOW_WIDTH = 420
 /** 297 mm roll height in CSS px (+ headroom) — window sized by math, not DOM. */
 const TEST_PRINT_WINDOW_HEIGHT = Math.ceil((297 / 25.4) * 96) + 200
@@ -413,7 +413,15 @@ async function waitForSlipDom(webContents, slipId, timeoutMs = 5000) {
   }
 }
 
+// Short-lived cache so a burst of slips (multi-token order) does not re-enumerate
+// printers on every slip. Printers do not change mid-order; 10s is well within a job.
+let _printerCache = { name: '', at: 0 }
+const PRINTER_CACHE_TTL_MS = 10000
+
 async function resolvePrinterDeviceName() {
+  if (_printerCache.name && Date.now() - _printerCache.at < PRINTER_CACHE_TTL_MS) {
+    return _printerCache.name
+  }
   const cfg = loadConfig()
   const printers = await mainWindow.webContents.getPrintersAsync()
   let deviceName = cfg?.printerName || ''
@@ -423,6 +431,7 @@ async function resolvePrinterDeviceName() {
   if (!deviceName) {
     deviceName = pickPhysicalPrinter(printers)?.name || ''
   }
+  _printerCache = { name: deviceName, at: Date.now() }
   return deviceName
 }
 
@@ -462,8 +471,9 @@ async function printReceiptSlip(meta = {}) {
   const deviceName = await resolvePrinterDeviceName()
   let result = await printWebContents(mainWindow.webContents, deviceName)
 
-  // Wait 800ms for physical print/feed to complete and status registers to update
-  await new Promise((resolve) => setTimeout(resolve, 800))
+  // Wait for physical print/feed to complete and status registers to update.
+  // Kept short for throughput; still long enough for the post-print sensor re-check below.
+  await new Promise((resolve) => setTimeout(resolve, 300))
 
   // Force a fresh DLL query — the background poll fires every 5 seconds, so if paper
   // ran out *during* this print job the cached status might still say READY/NEAR_END.
@@ -614,6 +624,7 @@ ipcMain.handle('save-config', (_event, cfg) => {
   }
   if (cfg.printerName !== undefined) {
     merged.printerName = cfg.printerName ? String(cfg.printerName) : ''
+    _printerCache = { name: '', at: 0 } // staff changed printer — drop cached device
   }
   if (typeof cfg.openAtLogin === 'boolean') {
     merged.openAtLogin = cfg.openAtLogin
