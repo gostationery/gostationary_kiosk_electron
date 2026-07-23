@@ -700,6 +700,8 @@ function startPrinterMonitor(config, loggerFn) {
         sendPrinterStatusLog('PAPER_LOW', 'Paper level is low');
       } else if (currentStatus === 'READY' && (lastStatus === 'NEAR_END' || lastStatus === 'PAPER_OUT')) {
         sendPrinterStatusLog('PAPER_REFILLED', 'Paper refilled, printer ready');
+c      } else if (currentStatus === 'READY' && lastStatus === 'COVER_OPEN') {
+        sendPrinterStatusLog('COVER_CLOSED', 'Printer cover was closed');
       }
 
       lastStatus = currentStatus;
