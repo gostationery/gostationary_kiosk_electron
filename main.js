@@ -5,7 +5,9 @@
  *  1. On first launch → show setup.html (enter org_domain + machine_serial)
  *  2. After setup → load bundled kiosk UI at http://127.0.0.1:{port}/{domain}/{serial}?apiBase={backend}
  *  3. Stores config in userData/kiosk-config.json (optional: printerName, openAtLogin)
- *  4. Ctrl/Cmd+Shift+L → clears domain/serial, returns to setup (keeps printer + boot prefs)
+ *  4. Ctrl/Cmd+Shift+L → confirmation dialog, then clears domain/serial, returns to setup
+ *     (keeps printer + boot prefs). Confirmation gate exists because globalShortcut fires
+ *     on any HID device Windows treats as a keyboard, not just an attached keyboard.
  *  5. IPC print-slip / silent-print → silent receipt print (serialized queue)
  *  6. Token print jobs → manifest + per-slip ack for multi-token orders
  */
@@ -15,6 +17,7 @@ const {
   BrowserWindow,
   ipcMain,
   globalShortcut,
+  dialog,
 } = require('electron')
 const path = require('path')
 const fs = require('fs')
@@ -587,8 +590,31 @@ app.whenReady().then(async () => {
   createWindow()
   initAutoUpdater()
 
-  globalShortcut.register('CommandOrControl+Shift+L', () => {
-    mainLog('shortcut: returning to setup (Ctrl+Shift+L)')
+  /** Auto-cancel if nobody answers — an unattended kiosk must never sit frozen on this prompt. */
+  const PAIRING_RESET_PROMPT_TIMEOUT_MS = 20000
+
+  globalShortcut.register('CommandOrControl+Shift+L', async () => {
+    mainLog('shortcut: Ctrl+Shift+L pressed — asking for confirmation before wiping pairing')
+    const confirmed = await Promise.race([
+      dialog
+        .showMessageBox(mainWindow, {
+          type: 'warning',
+          buttons: ['Cancel', 'Reset machine pairing'],
+          defaultId: 0,
+          cancelId: 0,
+          title: 'Reset kiosk pairing?',
+          message: 'This will unpair this machine (organisation + serial) and return it to setup.',
+          detail: 'Only confirm this if you intentionally want to re-pair the kiosk. If you did not press Ctrl+Shift+L yourself, choose Cancel and report this.',
+        })
+        .then(({ response }) => response === 1),
+      new Promise((resolve) => setTimeout(() => resolve(false), PAIRING_RESET_PROMPT_TIMEOUT_MS)),
+    ])
+
+    if (!confirmed) {
+      mainLog('shortcut: pairing reset cancelled or timed out unanswered')
+      return
+    }
+    mainLog('shortcut: pairing reset confirmed — returning to setup')
     clearMachinePairing()
     mainWindow.loadFile(path.join(__dirname, 'setup.html'))
   })
