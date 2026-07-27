@@ -21,6 +21,7 @@ const fs = require('fs')
 const { createKioskStaticServer, KIOSK_UI_DIR } = require('./kiosk-static-server')
 const { initAutoUpdater } = require('./auto-updater')
 const { startPrinterMonitor, stopPrinterMonitor, reportPrintJobResult, queryPrinterStatusOnDemand } = require('./printer-monitor')
+const { createConfigStore } = require('./kiosk-config-store')
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000'
 const KIOSK_STATIC_PORT_PREFERRED = 47831
@@ -94,27 +95,15 @@ function attachKioskWebLogging(win) {
 }
 
 // ── Config helpers ──────────────────────────────────────────────────────────
-const CONFIG_PATH = path.join(app.getPath('userData'), 'kiosk-config.json')
-
-function loadConfig() {
-  try {
-    if (fs.existsSync(CONFIG_PATH)) {
-      return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
-    }
-  } catch { }
-  return null
-}
-
-function saveConfig(cfg) {
-  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true })
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2))
-}
-
-function clearConfigFile() {
-  try {
-    fs.unlinkSync(CONFIG_PATH)
-  } catch { }
-}
+// Shared, crash-safe store: kiosk-config.json is written both here (pairing/
+// prefs) and from printer-monitor.js (print stats on every job), and a kiosk
+// can lose power at any moment — see kiosk-config-store.js for the atomic
+// write + backup-recovery guarantees.
+const configStore = createConfigStore(path.join(app.getPath('userData'), 'kiosk-config.json'), mainLog)
+const CONFIG_PATH = configStore.CONFIG_PATH
+const loadConfig = configStore.load
+const saveConfig = configStore.save
+const clearConfigFile = configStore.clear
 
 /** Remove pairing only; keep printerName + openAtLogin so kiosk staff shortcuts do not wipe device prefs. */
 function clearMachinePairing() {

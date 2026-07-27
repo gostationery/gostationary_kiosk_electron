@@ -39,8 +39,11 @@
       "auto-updater.js",
       "preload.js",
       "setup.html",
+      "pairing-reset-confirm.html",
+      "pairing-reset-preload.js",
       "kiosk-static-server.js",
       "printer-monitor.js",
+      "kiosk-config-store.js",
       "kiosk-ui/**",
       "assets/**"
     ],
