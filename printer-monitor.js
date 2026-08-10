@@ -39,7 +39,11 @@ const _rawDllPath = path.join(__dirname, 'assets', 'CsnPrinterLibs.dll');
 const DLL_PATH = _rawDllPath.includes('app.asar') && !_rawDllPath.includes('app.asar.unpacked')
   ? _rawDllPath.replace('app.asar', 'app.asar.unpacked')
   : _rawDllPath;
+const { createConfigStore } = require('./kiosk-config-store');
 const CONFIG_PATH = path.join(app.getPath('userData'), 'kiosk-config.json');
+// Shared with main.js — see kiosk-config-store.js for the atomic write +
+// backup-recovery guarantees that protect this file across a power cut.
+const configStore = createConfigStore(CONFIG_PATH, (...args) => mainLog(...args));
 
 let printerHandle = null;
 let printerConnected = false;
@@ -54,14 +58,16 @@ const stats = {
 
 function saveStatsToConfig() {
   try {
-    let cfg = {};
-    if (fs.existsSync(CONFIG_PATH)) {
-      cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-    }
-    cfg.jobs_printed = stats.printed;
-    cfg.jobs_failed = stats.failed;
-    cfg.stats_date = stats.date;
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), 'utf8');
+    // This runs on every print job, so it goes through the shared atomic
+    // store (tmp file + fsync + rename) — a power cut mid-write must never
+    // truncate/corrupt kiosk-config.json, which also holds the machine's
+    // domain/serial pairing.
+    configStore.update((cfg) => {
+      cfg.jobs_printed = stats.printed;
+      cfg.jobs_failed = stats.failed;
+      cfg.stats_date = stats.date;
+      return cfg;
+    });
   } catch (err) {
     mainLog('[Printer Monitor] Failed to save stats to config:', err.message || err);
   }
@@ -700,7 +706,7 @@ function startPrinterMonitor(config, loggerFn) {
         sendPrinterStatusLog('PAPER_LOW', 'Paper level is low');
       } else if (currentStatus === 'READY' && (lastStatus === 'NEAR_END' || lastStatus === 'PAPER_OUT')) {
         sendPrinterStatusLog('PAPER_REFILLED', 'Paper refilled, printer ready');
-c      } else if (currentStatus === 'READY' && lastStatus === 'COVER_OPEN') {
+      } else if (currentStatus === 'READY' && lastStatus === 'COVER_OPEN') {
         sendPrinterStatusLog('COVER_CLOSED', 'Printer cover was closed');
       }
 

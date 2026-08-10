@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Reset kiosk pairing?</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #1c1c1e;
+    color: #f2f2f2;
+    font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+    overflow: hidden;
+  }
+  .wrap {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 20px 22px 16px;
+  }
+  h1 {
+    font-size: 17px;
+    margin: 0 0 8px;
+    color: #ffb648;
+  }
+  p {
+    font-size: 13px;
+    line-height: 1.45;
+    margin: 0 0 10px;
+    color: #d0d0d2;
+  }
+  .countdown {
+    font-size: 12px;
+    color: #9a9a9c;
+    margin-bottom: auto;
+  }
+  .buttons {
+    display: flex;
+    gap: 10px;
+    margin-top: 14px;
+  }
+  button {
+    flex: 1;
+    padding: 10px 8px;
+    border-radius: 8px;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #cancel {
+    background: #3a3a3c;
+    color: #fff;
+  }
+  #confirm {
+    background: #c9432e;
+    color: #fff;
+  }
+  #cancel:active, #confirm:active {
+    opacity: 0.8;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Reset kiosk pairing?</h1>
+    <p>This will unpair this machine (organisation + serial) and return it to setup.</p>
+    <p>Only confirm this if you intentionally want to re-pair the kiosk. If you did not do this yourself, choose Cancel and report it.</p>
+    <div class="countdown" id="countdown"></div>
+    <div class="buttons">
+      <button id="cancel">Cancel</button>
+      <button id="confirm">Reset machine pairing</button>
+    </div>
+  </div>
+  <script>
+    let secondsLeft = window.pairingResetAPI.timeoutSeconds
+    const countdownEl = document.getElementById('countdown')
+    function renderCountdown() {
+      countdownEl.textContent = `Auto-cancels in ${secondsLeft}s if unanswered`
+    }
+    renderCountdown()
+    const tick = setInterval(() => {
+      secondsLeft -= 1
+      if (secondsLeft <= 0) {
+        clearInterval(tick)
+        return
+      }
+      renderCountdown()
+    }, 1000)
+
+    document.getElementById('cancel').addEventListener('click', () => {
+      window.pairingResetAPI.respond(false)
+    })
+    document.getElementById('confirm').addEventListener('click', () => {
+      window.pairingResetAPI.respond(true)
+    })
+  </script>
+</body>
+</html>

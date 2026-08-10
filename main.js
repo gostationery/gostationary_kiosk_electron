@@ -5,9 +5,11 @@
  *  1. On first launch → show setup.html (enter org_domain + machine_serial)
  *  2. After setup → load bundled kiosk UI at http://127.0.0.1:{port}/{domain}/{serial}?apiBase={backend}
  *  3. Stores config in userData/kiosk-config.json (optional: printerName, openAtLogin)
- *  4. Ctrl/Cmd+Shift+L → confirmation dialog, then clears domain/serial, returns to setup
- *     (keeps printer + boot prefs). Confirmation gate exists because globalShortcut fires
- *     on any HID device Windows treats as a keyboard, not just an attached keyboard.
+ *  4. Ctrl/Cmd+Shift+L → self-owned confirm popup (pairing-reset-confirm.html), then clears
+ *     domain/serial, returns to setup (keeps printer + boot prefs). Confirmation gate exists
+ *     because globalShortcut fires on any HID device Windows treats as a keyboard, not just
+ *     an attached keyboard. Uses our own modal (not dialog.showMessageBox) so it can be
+ *     force-closed on a timeout — an unattended kiosk can never be left stuck on it.
  *  5. IPC print-slip / silent-print → silent receipt print (serialized queue)
  *  6. Token print jobs → manifest + per-slip ack for multi-token orders
  */
@@ -17,13 +19,13 @@ const {
   BrowserWindow,
   ipcMain,
   globalShortcut,
-  dialog,
 } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { createKioskStaticServer, KIOSK_UI_DIR } = require('./kiosk-static-server')
 const { initAutoUpdater } = require('./auto-updater')
 const { startPrinterMonitor, stopPrinterMonitor, reportPrintJobResult, queryPrinterStatusOnDemand } = require('./printer-monitor')
+const { createConfigStore } = require('./kiosk-config-store')
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000'
 const KIOSK_STATIC_PORT_PREFERRED = 47831
@@ -97,27 +99,15 @@ function attachKioskWebLogging(win) {
 }
 
 // ── Config helpers ──────────────────────────────────────────────────────────
-const CONFIG_PATH = path.join(app.getPath('userData'), 'kiosk-config.json')
-
-function loadConfig() {
-  try {
-    if (fs.existsSync(CONFIG_PATH)) {
-      return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
-    }
-  } catch { }
-  return null
-}
-
-function saveConfig(cfg) {
-  fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true })
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2))
-}
-
-function clearConfigFile() {
-  try {
-    fs.unlinkSync(CONFIG_PATH)
-  } catch { }
-}
+// Shared, crash-safe store: kiosk-config.json is written both here (pairing/
+// prefs) and from printer-monitor.js (print stats on every job), and a kiosk
+// can lose power at any moment — see kiosk-config-store.js for the atomic
+// write + backup-recovery guarantees.
+const configStore = createConfigStore(path.join(app.getPath('userData'), 'kiosk-config.json'), mainLog)
+const CONFIG_PATH = configStore.CONFIG_PATH
+const loadConfig = configStore.load
+const saveConfig = configStore.save
+const clearConfigFile = configStore.clear
 
 /** Remove pairing only; keep printerName + openAtLogin so kiosk staff shortcuts do not wipe device prefs. */
 function clearMachinePairing() {
@@ -592,23 +582,72 @@ app.whenReady().then(async () => {
 
   /** Auto-cancel if nobody answers — an unattended kiosk must never sit frozen on this prompt. */
   const PAIRING_RESET_PROMPT_TIMEOUT_MS = 20000
+  let pairingResetPromptOpen = false
+
+  /**
+   * Self-owned modal (not the native dialog API) so we can force-close it
+   * ourselves on timeout — an unattended kiosk can never be left blocked by
+   * an unanswered popup, unlike Electron's showMessageBox which has no
+   * programmatic close.
+   */
+  function askPairingResetConfirmation() {
+    return new Promise((resolve) => {
+      const promptWin = new BrowserWindow({
+        parent: mainWindow,
+        modal: true,
+        show: false,
+        width: 420,
+        height: 260,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        frame: false,
+        alwaysOnTop: true,
+        backgroundColor: '#1c1c1e',
+        webPreferences: {
+          preload: path.join(__dirname, 'pairing-reset-preload.js'),
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          additionalArguments: [`--pairing-reset-timeout-s=${PAIRING_RESET_PROMPT_TIMEOUT_MS / 1000}`],
+        },
+      })
+
+      let settled = false
+      const finish = (confirmed) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeoutHandle)
+        ipcMain.removeListener('pairing-reset:response', onResponse)
+        pairingResetPromptOpen = false
+        if (!promptWin.isDestroyed()) promptWin.destroy()
+        resolve(confirmed)
+      }
+
+      const onResponse = (_event, confirmed) => finish(Boolean(confirmed))
+      ipcMain.on('pairing-reset:response', onResponse)
+
+      const timeoutHandle = setTimeout(() => {
+        mainLog('pairing reset prompt: auto-closed after timeout, no response')
+        finish(false)
+      }, PAIRING_RESET_PROMPT_TIMEOUT_MS)
+
+      promptWin.once('ready-to-show', () => promptWin.show())
+      promptWin.on('closed', () => finish(false))
+      promptWin.loadFile(path.join(__dirname, 'pairing-reset-confirm.html'))
+    })
+  }
 
   globalShortcut.register('CommandOrControl+Shift+L', async () => {
+    if (pairingResetPromptOpen) {
+      mainLog('shortcut: Ctrl+Shift+L pressed again — prompt already open, ignoring')
+      return
+    }
+    pairingResetPromptOpen = true
     mainLog('shortcut: Ctrl+Shift+L pressed — asking for confirmation before wiping pairing')
-    const confirmed = await Promise.race([
-      dialog
-        .showMessageBox(mainWindow, {
-          type: 'warning',
-          buttons: ['Cancel', 'Reset machine pairing'],
-          defaultId: 0,
-          cancelId: 0,
-          title: 'Reset kiosk pairing?',
-          message: 'This will unpair this machine (organisation + serial) and return it to setup.',
-          detail: 'Only confirm this if you intentionally want to re-pair the kiosk. If you did not press Ctrl+Shift+L yourself, choose Cancel and report this.',
-        })
-        .then(({ response }) => response === 1),
-      new Promise((resolve) => setTimeout(() => resolve(false), PAIRING_RESET_PROMPT_TIMEOUT_MS)),
-    ])
+
+    const confirmed = await askPairingResetConfirmation()
 
     if (!confirmed) {
       mainLog('shortcut: pairing reset cancelled or timed out unanswered')
