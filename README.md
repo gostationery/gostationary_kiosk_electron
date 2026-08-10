@@ -98,4 +98,4 @@ Installed `.deb` / `.rpm` builds check GitHub for new versions and download upda
 
 1. Repo: [gostationery/gostationery_kiosk_electron](https://github.com/gostationery/gostationery_kiosk_electron).
 2. Tag push triggers CI (`.github/workflows/release.yml`).
-3. Point landing-page Linux downloads at the `.deb` / `.rpm` assets for the user’s CPU (amd64 vs arm64).
+3. Point landing-page Linux downloads at the `.deb` / `.rpm` assets for the user's CPU (amd64 vs arm64).
