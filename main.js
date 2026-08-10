@@ -5,7 +5,11 @@
  *  1. On first launch → show setup.html (enter org_domain + machine_serial)
  *  2. After setup → load bundled kiosk UI at http://127.0.0.1:{port}/{domain}/{serial}?apiBase={backend}
  *  3. Stores config in userData/kiosk-config.json (optional: printerName, openAtLogin)
- *  4. Ctrl/Cmd+Shift+L → clears domain/serial, returns to setup (keeps printer + boot prefs)
+ *  4. Ctrl/Cmd+Shift+L → self-owned confirm popup (pairing-reset-confirm.html), then clears
+ *     domain/serial, returns to setup (keeps printer + boot prefs). Confirmation gate exists
+ *     because globalShortcut fires on any HID device Windows treats as a keyboard, not just
+ *     an attached keyboard. Uses our own modal (not dialog.showMessageBox) so it can be
+ *     force-closed on a timeout — an unattended kiosk can never be left stuck on it.
  *  5. IPC print-slip / silent-print → silent receipt print (serialized queue)
  *  6. Token print jobs → manifest + per-slip ack for multi-token orders
  */
@@ -576,8 +580,80 @@ app.whenReady().then(async () => {
   createWindow()
   initAutoUpdater()
 
-  globalShortcut.register('CommandOrControl+Shift+L', () => {
-    mainLog('shortcut: returning to setup (Ctrl+Shift+L)')
+  /** Auto-cancel if nobody answers — an unattended kiosk must never sit frozen on this prompt. */
+  const PAIRING_RESET_PROMPT_TIMEOUT_MS = 20000
+  let pairingResetPromptOpen = false
+
+  /**
+   * Self-owned modal (not the native dialog API) so we can force-close it
+   * ourselves on timeout — an unattended kiosk can never be left blocked by
+   * an unanswered popup, unlike Electron's showMessageBox which has no
+   * programmatic close.
+   */
+  function askPairingResetConfirmation() {
+    return new Promise((resolve) => {
+      const promptWin = new BrowserWindow({
+        parent: mainWindow,
+        modal: true,
+        show: false,
+        width: 420,
+        height: 260,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        frame: false,
+        alwaysOnTop: true,
+        backgroundColor: '#1c1c1e',
+        webPreferences: {
+          preload: path.join(__dirname, 'pairing-reset-preload.js'),
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          additionalArguments: [`--pairing-reset-timeout-s=${PAIRING_RESET_PROMPT_TIMEOUT_MS / 1000}`],
+        },
+      })
+
+      let settled = false
+      const finish = (confirmed) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timeoutHandle)
+        ipcMain.removeListener('pairing-reset:response', onResponse)
+        pairingResetPromptOpen = false
+        if (!promptWin.isDestroyed()) promptWin.destroy()
+        resolve(confirmed)
+      }
+
+      const onResponse = (_event, confirmed) => finish(Boolean(confirmed))
+      ipcMain.on('pairing-reset:response', onResponse)
+
+      const timeoutHandle = setTimeout(() => {
+        mainLog('pairing reset prompt: auto-closed after timeout, no response')
+        finish(false)
+      }, PAIRING_RESET_PROMPT_TIMEOUT_MS)
+
+      promptWin.once('ready-to-show', () => promptWin.show())
+      promptWin.on('closed', () => finish(false))
+      promptWin.loadFile(path.join(__dirname, 'pairing-reset-confirm.html'))
+    })
+  }
+
+  globalShortcut.register('CommandOrControl+Shift+L', async () => {
+    if (pairingResetPromptOpen) {
+      mainLog('shortcut: Ctrl+Shift+L pressed again — prompt already open, ignoring')
+      return
+    }
+    pairingResetPromptOpen = true
+    mainLog('shortcut: Ctrl+Shift+L pressed — asking for confirmation before wiping pairing')
+
+    const confirmed = await askPairingResetConfirmation()
+
+    if (!confirmed) {
+      mainLog('shortcut: pairing reset cancelled or timed out unanswered')
+      return
+    }
+    mainLog('shortcut: pairing reset confirmed — returning to setup')
     clearMachinePairing()
     mainWindow.loadFile(path.join(__dirname, 'setup.html'))
   })
