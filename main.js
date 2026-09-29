@@ -511,6 +511,9 @@ async function startKioskStaticServer() {
   return kioskStaticServerInfo
 }
 
+/** Set once app is ready; shared by the global shortcut and the in-window fallback. */
+let requestPairingReset = null
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     fullscreen: true,
@@ -529,6 +532,13 @@ function createWindow() {
 
   // Explicitly support Ctrl/Cmd + (+ / - / 0) zoom shortcuts
   mainWindow.webContents.on('before-input-event', (event, input) => {
+    // Fallback for Ctrl+Shift+L: globalShortcut can silently fail to register
+    // (key already held by another app / stale instance), so also catch it here.
+    if (input.type === 'keyDown' && (input.control || input.meta) && input.shift && String(input.key).toLowerCase() === 'l') {
+      event.preventDefault()
+      void requestPairingReset?.()
+      return
+    }
     if (input.type === 'keyDown' && (input.control || input.meta)) {
       if (input.key === '=' || input.key === '+') {
         const current = mainWindow.webContents.getZoomLevel()
@@ -578,7 +588,12 @@ app.whenReady().then(async () => {
     return
   }
   createWindow()
-  initAutoUpdater()
+  // Must never abort startup: everything below (incl. the Ctrl+Shift+L shortcut) runs after this.
+  try {
+    initAutoUpdater()
+  } catch (err) {
+    mainLog('auto-updater failed to start', { message: String(err?.message || err) })
+  }
 
   /** Auto-cancel if nobody answers — an unattended kiosk must never sit frozen on this prompt. */
   const PAIRING_RESET_PROMPT_TIMEOUT_MS = 20000
@@ -639,7 +654,7 @@ app.whenReady().then(async () => {
     })
   }
 
-  globalShortcut.register('CommandOrControl+Shift+L', async () => {
+  requestPairingReset = async () => {
     if (pairingResetPromptOpen) {
       mainLog('shortcut: Ctrl+Shift+L pressed again — prompt already open, ignoring')
       return
@@ -656,7 +671,15 @@ app.whenReady().then(async () => {
     mainLog('shortcut: pairing reset confirmed — returning to setup')
     clearMachinePairing()
     mainWindow.loadFile(path.join(__dirname, 'setup.html'))
-  })
+  }
+
+  const registerPairingResetShortcut = () => {
+    if (globalShortcut.isRegistered('CommandOrControl+Shift+L')) return
+    const ok = globalShortcut.register('CommandOrControl+Shift+L', () => { void requestPairingReset() })
+    if (!ok) mainLog('shortcut: Ctrl+Shift+L global registration FAILED (held by another app?) — in-window fallback only')
+  }
+  registerPairingResetShortcut()
+  mainWindow.on('focus', registerPairingResetShortcut)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
