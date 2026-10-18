@@ -322,6 +322,34 @@ function resolveDevicePath(windowsPrinterName) {
 
 let lastStatus = 'UNKNOWN';
 let currentStatus = 'UNKNOWN';
+
+// The paper/cover sensor glitches for a moment while a slip is feeding or cutting. An error
+// reading is only trusted (and alerted on) once it has persisted this long.
+const HARDWARE_ERROR_CONFIRM_MS = 5000;
+const HARDWARE_ERROR_RECHECK_MS = 500;
+let hardwareErrorSeenSince = 0;
+
+function isHardwareError(status) {
+  return status === 'PAPER_OUT' || status === 'COVER_OPEN' || status === 'OFF';
+}
+
+/**
+ * Given an error reading, re-check the printer until it clears or has stayed in error for
+ * HARDWARE_ERROR_CONFIRM_MS. Returns the first non-error status seen, or the error status
+ * if it persisted for the whole window.
+ */
+async function confirmHardwareError(initialStatus) {
+  const startedAt = Date.now();
+  let status = initialStatus;
+  while (isHardwareError(status) && Date.now() - startedAt < HARDWARE_ERROR_CONFIRM_MS) {
+    await new Promise((resolve) => setTimeout(resolve, HARDWARE_ERROR_RECHECK_MS));
+    status = queryPrinterStatusOnDemand(true);
+  }
+  if (!isHardwareError(status)) {
+    mainLog(`[Printer Monitor] ${initialStatus} reading cleared after ${Date.now() - startedAt}ms -> ${status} (treated as sensor blip)`);
+  }
+  return status;
+}
 let lastHeartbeatAt = 0;
 let appConfig = null;
 let activePrinterName = ''; // Windows spooler name of the currently monitored printer
@@ -690,6 +718,17 @@ function startPrinterMonitor(config, loggerFn) {
       currentStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF';
     }
 
+    // Hold back a new error state until it has persisted, so a sensor blip during a print
+    // neither flips the status nor triggers a paper-out alert.
+    if (isHardwareError(currentStatus) && currentStatus !== lastStatus) {
+      if (!hardwareErrorSeenSince) hardwareErrorSeenSince = Date.now();
+      if (Date.now() - hardwareErrorSeenSince < HARDWARE_ERROR_CONFIRM_MS - 500) {
+        currentStatus = lastStatus;
+      }
+    } else {
+      hardwareErrorSeenSince = 0;
+    }
+
     const statusChanged = currentStatus !== lastStatus;
 
     if (statusChanged) {
@@ -733,7 +772,7 @@ function stopPrinterMonitor() {
   printerConnected = false;
 }
 
-function reportPrintJobResult(success, errorMsg = null) {
+function reportPrintJobResult(success, errorMsg = null, knownStatus = null) {
   checkDailyReset();
   if (success) {
     stats.printed++;
@@ -745,7 +784,8 @@ function reportPrintJobResult(success, errorMsg = null) {
   // Immediately report job completion update to backend. Reopen a fresh handle so
   // the status reflects the printer right now (a reused handle can be stale, e.g.
   // paper that ran out on this very job).
-  const status = reopenHandleFresh() ? getPrinterStatus() : 'OFF';
+  // A caller-supplied status has already been debounced, so a sensor blip is not reported.
+  const status = knownStatus || (reopenHandleFresh() ? getPrinterStatus() : 'OFF');
   sendUpdateToBackend(status, stats.printed, stats.failed, errorMsg);
 }
 
@@ -775,7 +815,8 @@ function queryPrinterStatusOnDemand(forceRefresh = false, printerNameOverride = 
       // never races with the poll's own reopen (no concurrent second handle).
       if (Pos_QueryStstus && reopenHandleFresh()) {
         const fresh = getPrinterStatus();
-        currentStatus = fresh;
+        // Error readings are left to the debounced poll (or confirmHardwareError) to commit.
+        if (!isHardwareError(fresh)) currentStatus = fresh;
         return fresh;
       }
       return currentStatus;
@@ -856,6 +897,8 @@ module.exports = {
   stopPrinterMonitor,
   reportPrintJobResult,
   queryPrinterStatusOnDemand,
-  enumDevicePaths,       // exposed for diagnostics / tests
+  confirmHardwareError,
+  isHardwareError,
+  enumDevicePaths,      // exposed for diagnostics / tests
   enumPnpPrinterDevices, // exposed for diagnostics / tests
 };

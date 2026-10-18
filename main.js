@@ -24,7 +24,7 @@ const path = require('path')
 const fs = require('fs')
 const { createKioskStaticServer, KIOSK_UI_DIR } = require('./kiosk-static-server')
 const { initAutoUpdater } = require('./auto-updater')
-const { startPrinterMonitor, stopPrinterMonitor, reportPrintJobResult, queryPrinterStatusOnDemand } = require('./printer-monitor')
+const { startPrinterMonitor, stopPrinterMonitor, reportPrintJobResult, queryPrinterStatusOnDemand, confirmHardwareError, isHardwareError } = require('./printer-monitor')
 const { createConfigStore } = require('./kiosk-config-store')
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000'
@@ -454,9 +454,16 @@ async function printReceiptSlip(meta = {}) {
     }
   }
 
-  // Force a live status query before printing to avoid spooling when already in error state
-  const printerStatus = queryPrinterStatusOnDemand(true)
-  if (printerStatus === 'PAPER_OUT' || printerStatus === 'COVER_OPEN' || printerStatus === 'OFF') {
+  // Never print the same slip twice: a slip already confirmed printed is acknowledged, not re-sent.
+  if (jobId && slipId && tokenPrintJobs.get(jobId)?.printed.has(slipId)) {
+    return { success: true, slipId, alreadyPrinted: true }
+  }
+
+  // Force a live status query before printing to avoid spooling when already in error state.
+  // A one-off error reading is re-checked for a few seconds before it aborts the slip.
+  let printerStatus = queryPrinterStatusOnDemand(true)
+  if (isHardwareError(printerStatus)) printerStatus = await confirmHardwareError(printerStatus)
+  if (isHardwareError(printerStatus)) {
     console.error('[Gostationery Kiosk] Print aborted: printer hardware error', printerStatus)
     return { success: false, errorType: `printer-${printerStatus.toLowerCase()}`, slipId: meta.slipId || undefined }
   }
@@ -470,10 +477,20 @@ async function printReceiptSlip(meta = {}) {
 
   // Force a fresh DLL query — the background poll fires every 5 seconds, so if paper
   // ran out *during* this print job the cached status might still say READY/NEAR_END.
-  const printerStatusAfter = queryPrinterStatusOnDemand(true)
-  if (result.success && (printerStatusAfter === 'PAPER_OUT' || printerStatusAfter === 'COVER_OPEN' || printerStatusAfter === 'OFF')) {
-    result.success = false
-    result.errorType = `printer-${printerStatusAfter.toLowerCase()}`
+  // The sensor often glitches to PAPER_OUT while the slip is feeding/cutting, so an error is only
+  // trusted if it persists (HARDWARE_ERROR_CONFIRM_MS). A genuine paper-out fails the slip so the
+  // whole token is re-printed once paper is back; a blip leaves the (already printed) slip as success,
+  // which prevents the duplicate token.
+  let printerStatusAfter = queryPrinterStatusOnDemand(true)
+  if (result.success && isHardwareError(printerStatusAfter)) {
+    const firstReading = printerStatusAfter
+    printerStatusAfter = await confirmHardwareError(printerStatusAfter)
+    if (isHardwareError(printerStatusAfter)) {
+      result.success = false
+      result.errorType = `printer-${printerStatusAfter.toLowerCase()}`
+    } else {
+      console.warn('[Gostationery Kiosk] Ignored transient', firstReading, 'reading after print; slip counted as printed', slipId || '')
+    }
   }
 
   if (result.success && jobId && slipId) {
@@ -484,7 +501,7 @@ async function printReceiptSlip(meta = {}) {
   }
 
   try {
-    reportPrintJobResult(result.success, result.success ? null : result.errorType)
+    reportPrintJobResult(result.success, result.success ? null : result.errorType, printerStatusAfter)
   } catch (err) {
     console.error('[Gostationery Kiosk] Failed to report print result to monitor:', err)
   }
