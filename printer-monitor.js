@@ -103,8 +103,8 @@ const devicePathCache = new Map();
  *
  * Returns array of { path, instanceId, vidpid, present } objects.
  */
-function enumDevicePaths() {
-  if (process.platform !== 'win32') return [];
+function enumDevicePaths(opts = {}) {
+  if (process.platform !== 'win32') return opts.async ? Promise.resolve([]) : [];
 
   const psScript = `
 $guid = '${PRINTER_GUID}'
@@ -128,30 +128,57 @@ if (Test-Path -LiteralPath $base) {
     if ($pp.Count -lt 4) { return }
     $vidpid = $pp[1]
     $serial = $pp[2]
-    $isPresent = if ($present.Count -eq 0) { $true } else { [bool]$present[$serial] }
+    # Empty map = Get-PnpDevice failed: presence is UNKNOWN (null), not "everything present".
+    $isPresent = if ($present.Count -eq 0) { $null } else { [bool]$present[$serial] }
     $results += [PSCustomObject]@{ path = $path; instanceId = $serial; vidpid = $vidpid; present = $isPresent }
   }
 }
 $results | ConvertTo-Json -Compress
 `.trim();
 
+  if (opts.async) {
+    return runPowerShellAsync(psScript, 8000).then(parseDevicePaths, (err) => {
+      mainLog('[Printer Monitor] enumDevicePaths (async) failed:', err.message || err);
+      return null; // inconclusive, NOT "no printers"
+    });
+  }
   try {
     const { execFileSync } = require('child_process');
     const raw = execFileSync(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-Command', psScript],
       { timeout: 8000, encoding: 'utf8' }
-    ).trim();
-
-    if (!raw || raw === 'null') return [];
-
-    const parsed = JSON.parse(raw);
-    const items = Array.isArray(parsed) ? parsed : [parsed];
-    return items.filter(x => x && x.path && x.path.startsWith('\\\\'));
+    );
+    return parseDevicePaths(raw);
   } catch (err) {
     mainLog('[Printer Monitor] enumDevicePaths failed:', err.message || err);
     return [];
   }
+}
+
+function parseDevicePaths(raw) {
+  raw = String(raw || '').trim();
+  if (!raw || raw === 'null') return [];
+  const parsed = JSON.parse(raw);
+  const items = Array.isArray(parsed) ? parsed : [parsed];
+  return items.filter(x => x && x.path && x.path.startsWith('\\\\'));
+}
+
+/**
+ * Same PowerShell call without blocking the Electron main thread. The sync
+ * execFileSync scans (8-10 s each) froze the whole app — print IPC included —
+ * whenever the poll loop re-discovered the printer.
+ */
+function runPowerShellAsync(psScript, timeoutMs) {
+  const { execFile } = require('child_process');
+  return new Promise((resolve, reject) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', psScript],
+      { timeout: timeoutMs, encoding: 'utf8', windowsHide: true },
+      (err, stdout) => (err ? reject(err) : resolve(stdout)),
+    );
+  });
 }
 
 /**
@@ -162,8 +189,8 @@ $results | ConvertTo-Json -Compress
  * Returns an array of { instanceId, friendlyName, printerName }.
  * printerName is the Windows spooler name (may be empty if not yet associated).
  */
-function enumPnpPrinterDevices() {
-  if (process.platform !== 'win32') return [];
+function enumPnpPrinterDevices(opts = {}) {
+  if (process.platform !== 'win32') return opts.async ? Promise.resolve([]) : [];
 
   const psScript = `
 $results = @()
@@ -198,17 +225,25 @@ try {
 $results | ConvertTo-Json -Compress
 `.trim();
 
-  try {
-    const { execFileSync } = require('child_process');
-    const raw = execFileSync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', psScript],
-      { timeout: 10000, encoding: 'utf8' }
-    ).trim();
-
+  const parse = (raw) => {
+    raw = String(raw || '').trim();
     if (!raw || raw === 'null') return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [parsed];
+  };
+  if (opts.async) {
+    return runPowerShellAsync(psScript, 10000).then(parse, (err) => {
+      mainLog('[Printer Monitor] enumPnpPrinterDevices (async) failed:', err.message || err);
+      return [];
+    });
+  }
+  try {
+    const { execFileSync } = require('child_process');
+    return parse(execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', psScript],
+      { timeout: 10000, encoding: 'utf8' }
+    ));
   } catch (err) {
     mainLog('[Printer Monitor] enumPnpPrinterDevices failed:', err.message || err);
     return [];
@@ -235,12 +270,16 @@ $results | ConvertTo-Json -Compress
  *  4. One compatible → use it. Multiple → correlate by chosen Windows printer
  *     name, else DLL-probe, else first.
  */
-function resolveDevicePath(windowsPrinterName) {
+function resolveDevicePath(windowsPrinterName, scan = null) {
   const cacheKey = windowsPrinterName || '';
-  if (devicePathCache.has(cacheKey)) return devicePathCache.get(cacheKey);
+  if (!scan && devicePathCache.has(cacheKey)) return devicePathCache.get(cacheKey);
 
-  const all = enumDevicePaths();
-  const usable = all.some(p => p.present) ? all.filter(p => p.present) : all;
+  const all = scan ? scan.all : enumDevicePaths();
+  // Only devices confirmed present are usable. Every printer this PC has EVER had
+  // stays registered, so "none present" means unplugged (OFF), not "use them all".
+  // Only when presence could not be read at all (cold start) do we try every entry.
+  const presenceKnown = all.some(p => p.present != null);
+  const usable = presenceKnown || scan ? all.filter(p => p.present === true) : all;
   const anyPresent = usable.length > 0;
 
   mainLog(`[Printer Monitor] USB-print scan found ${usable.length} present printer(s).`);
@@ -271,7 +310,7 @@ function resolveDevicePath(windowsPrinterName) {
 
   // Multiple compatible printers — correlate by the chosen Windows printer name.
   if (cacheKey) {
-    const pnpDevs = enumPnpPrinterDevices();
+    const pnpDevs = scan ? scan.pnpDevs : enumPnpPrinterDevices();
     mainLog(`[Printer Monitor] ${compatible.length} compatible printers; correlating "${cacheKey}" via ${pnpDevs.length} PnP device(s)`);
 
     // First pass: exact printerName match from port registry
@@ -320,8 +359,42 @@ function resolveDevicePath(windowsPrinterName) {
   return cacheAndReturn(compatible[0].path);
 }
 
+let rediscoverInFlight = false;
+
+/**
+ * Re-discover the printer's device path off the main thread and swap it into the
+ * cache when done. An inconclusive scan (PowerShell failed/timed out, or USB
+ * presence unreadable — which would list every printer this PC ever had) keeps
+ * the previous path instead of replacing it with a stale, unopenable one.
+ */
+async function rediscoverDevicePathAsync(windowsPrinterName) {
+  if (rediscoverInFlight) return;
+  rediscoverInFlight = true;
+  try {
+    const all = await enumDevicePaths({ async: true });
+    if (!all || (all.length > 0 && all.every(p => p.present == null))) {
+      mainLog('[Printer Monitor] Re-scan inconclusive; keeping the current printer path.');
+      return;
+    }
+    const compatible = all.filter(p => p.present === true && COMPATIBLE_VIDS.has(vidOf(p.vidpid)));
+    const pnpDevs = compatible.length > 1 && windowsPrinterName
+      ? await enumPnpPrinterDevices({ async: true })
+      : [];
+    devicePathCache.delete(windowsPrinterName || '');
+    resolveDevicePath(windowsPrinterName, { all, pnpDevs });
+  } catch (err) {
+    mainLog('[Printer Monitor] Re-scan failed:', err.message || err);
+  } finally {
+    rediscoverInFlight = false;
+  }
+}
+
 let lastStatus = 'UNKNOWN';
 let currentStatus = 'UNKNOWN';
+let currentStatusAt = 0; // ms timestamp of the last reading, so callers can tell how fresh it is
+// Short enough that a busy/stalled printer cannot hold the main thread for seconds;
+// still far above a healthy printer's real-time response (tens of ms).
+const STATUS_QUERY_TIMEOUT_MS = 700;
 let lastHeartbeatAt = 0;
 let appConfig = null;
 let activePrinterName = ''; // Windows spooler name of the currently monitored printer
@@ -434,9 +507,9 @@ function reopenHandleFresh() {
 function getPrinterStatus() {
   if (!Pos_QueryStstus) return 'OFF';
   try {
-    const t1 = Buffer.alloc(4); Pos_QueryStstus(t1, 1, 1500);
-    const t2 = Buffer.alloc(4); Pos_QueryStstus(t2, 2, 1500); // queried for protocol; not used for detection
-    const t4 = Buffer.alloc(4); Pos_QueryStstus(t4, 4, 1500);
+    const t1 = Buffer.alloc(4); Pos_QueryStstus(t1, 1, STATUS_QUERY_TIMEOUT_MS);
+    const t2 = Buffer.alloc(4); Pos_QueryStstus(t2, 2, STATUS_QUERY_TIMEOUT_MS); // queried for protocol; not used for detection
+    const t4 = Buffer.alloc(4); Pos_QueryStstus(t4, 4, STATUS_QUERY_TIMEOUT_MS);
 
     mainLog(`[Printer Status] t1=0x${t1[0].toString(16).padStart(2,'0')} t2=0x${t2[0].toString(16).padStart(2,'0')} t4=0x${t4[0].toString(16).padStart(2,'0')}`);
 
@@ -661,9 +734,10 @@ function startPrinterMonitor(config, loggerFn) {
     initialStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF';
   }
   lastStatus = initialStatus;
-  currentStatus = initialStatus;
+  currentStatus = initialStatus; currentStatusAt = Date.now();
   lastHeartbeatAt = 0; // force first interval tick to send immediately
   let lastRediscoverAt = Date.now();
+  let openFailStreak = 0;
   sendUpdateToBackend(initialStatus, stats.printed, stats.failed);
 
   // Poll status every 5 seconds
@@ -672,22 +746,28 @@ function startPrinterMonitor(config, loggerFn) {
 
     if (!hasDll) {
       const { anyPresent } = resolveDevicePath(activePrinterName);
-      currentStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF';
+      currentStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF'; currentStatusAt = Date.now();
     } else if (reopenHandleFresh()) {
       // Reopen a FRESH handle every poll before reading so the DLL doesn't return
       // stale buffered status. The cached device path makes this a cheap local USB
       // open (no PowerShell rescan) on the healthy path.
-      currentStatus = getPrinterStatus();
+      openFailStreak = 0;
+      currentStatus = getPrinterStatus(); currentStatusAt = Date.now();
+    } else if (++openFailStreak < 2 && !['OFF', 'NOT_SUPPORTED', 'UNKNOWN'].includes(currentStatus)) {
+      // One failed open of a printer that was just answering is usually transient
+      // (USB busy right after a job). Keep the last reading - left to age, so the
+      // print gate does its own fresh read - instead of flapping to OFF and alerting.
     } else {
       // No live handle: distinguish wrong-printer from nothing-connected, and
-      // periodically drop the path cache so a (re)plugged printer is rediscovered
-      // (bounded to once per 15s to cap the PowerShell scan cost).
+      // periodically re-discover so a (re)plugged printer is found (once per 15s,
+      // in the background - never a blocking PowerShell scan on this thread).
       if (Date.now() - lastRediscoverAt >= 15_000) {
-        devicePathCache.delete(activePrinterName);
         lastRediscoverAt = Date.now();
+        void rediscoverDevicePathAsync(activePrinterName);
       }
-      const { anyPresent } = resolveDevicePath(activePrinterName);
-      currentStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF';
+      const cached = devicePathCache.get(activePrinterName || '');
+      const anyPresent = cached ? cached.anyPresent : false;
+      currentStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF'; currentStatusAt = Date.now();
     }
 
     const statusChanged = currentStatus !== lastStatus;
@@ -733,7 +813,14 @@ function stopPrinterMonitor() {
   printerConnected = false;
 }
 
-function reportPrintJobResult(success, errorMsg = null) {
+/**
+ * @param {boolean} success
+ * @param {string|null} [errorMsg]
+ * @param {string|null} [knownStatus] - printer status the caller already has; when
+ *   omitted the monitor's latest reading is used. Never opens the USB port here:
+ *   this runs right after every slip and must not block the main thread.
+ */
+function reportPrintJobResult(success, errorMsg = null, knownStatus = null) {
   checkDailyReset();
   if (success) {
     stats.printed++;
@@ -742,11 +829,12 @@ function reportPrintJobResult(success, errorMsg = null) {
   }
   saveStatsToConfig();
   sendPrintJobLog(success, errorMsg);
-  // Immediately report job completion update to backend. Reopen a fresh handle so
-  // the status reflects the printer right now (a reused handle can be stale, e.g.
-  // paper that ran out on this very job).
-  const status = reopenHandleFresh() ? getPrinterStatus() : 'OFF';
-  sendUpdateToBackend(status, stats.printed, stats.failed, errorMsg);
+  sendUpdateToBackend(knownStatus || currentStatus, stats.printed, stats.failed, errorMsg);
+}
+
+/** Latest reading from the background monitor, with its age. Never blocks. */
+function getLatestStatus() {
+  return { status: currentStatus, ageMs: currentStatusAt ? Date.now() - currentStatusAt : Infinity };
 }
 
 /**
@@ -775,7 +863,7 @@ function queryPrinterStatusOnDemand(forceRefresh = false, printerNameOverride = 
       // never races with the poll's own reopen (no concurrent second handle).
       if (Pos_QueryStstus && reopenHandleFresh()) {
         const fresh = getPrinterStatus();
-        currentStatus = fresh;
+        currentStatus = fresh; currentStatusAt = Date.now();
         return fresh;
       }
       return currentStatus;
@@ -824,9 +912,9 @@ function queryPrinterStatusOnDemand(forceRefresh = false, printerNameOverride = 
 
     let status = 'READY';
     if (Pos_QueryStstus) {
-      const t1 = Buffer.alloc(4); Pos_QueryStstus(t1, 1, 1500);
-      const t2 = Buffer.alloc(4); Pos_QueryStstus(t2, 2, 1500);
-      const t4 = Buffer.alloc(4); Pos_QueryStstus(t4, 4, 1500);
+      const t1 = Buffer.alloc(4); Pos_QueryStstus(t1, 1, STATUS_QUERY_TIMEOUT_MS);
+      const t2 = Buffer.alloc(4); Pos_QueryStstus(t2, 2, STATUS_QUERY_TIMEOUT_MS);
+      const t4 = Buffer.alloc(4); Pos_QueryStstus(t4, 4, STATUS_QUERY_TIMEOUT_MS);
 
       mainLog(`[Printer OnDemand] Raw: t1=0x${t1[0].toString(16).padStart(2,'0')} t2=0x${t2[0].toString(16).padStart(2,'0')} t4=0x${t4[0].toString(16).padStart(2,'0')}`);
 
@@ -855,6 +943,7 @@ module.exports = {
   startPrinterMonitor,
   stopPrinterMonitor,
   reportPrintJobResult,
+  getLatestStatus,
   queryPrinterStatusOnDemand,
   enumDevicePaths,       // exposed for diagnostics / tests
   enumPnpPrinterDevices, // exposed for diagnostics / tests

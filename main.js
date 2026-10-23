@@ -24,7 +24,9 @@ const path = require('path')
 const fs = require('fs')
 const { createKioskStaticServer, KIOSK_UI_DIR } = require('./kiosk-static-server')
 const { initAutoUpdater } = require('./auto-updater')
-const { startPrinterMonitor, stopPrinterMonitor, reportPrintJobResult, queryPrinterStatusOnDemand } = require('./printer-monitor')
+const { startPrinterMonitor, stopPrinterMonitor, reportPrintJobResult, queryPrinterStatusOnDemand, getLatestStatus } = require('./printer-monitor')
+const { createPrintedSlipsStore } = require('./printed-slips-store')
+const { checkAfterPrint } = require('./post-print-check')
 const { createConfigStore } = require('./kiosk-config-store')
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000'
@@ -105,6 +107,7 @@ function attachKioskWebLogging(win) {
 // write + backup-recovery guarantees.
 const configStore = createConfigStore(path.join(app.getPath('userData'), 'kiosk-config.json'), mainLog)
 const CONFIG_PATH = configStore.CONFIG_PATH
+const printedSlips = createPrintedSlipsStore(path.join(app.getPath('userData'), 'printed-slips.json'), mainLog)
 const loadConfig = configStore.load
 const saveConfig = configStore.save
 const clearConfigFile = configStore.clear
@@ -183,6 +186,9 @@ function pickPhysicalPrinter(printers) {
 const RECEIPT_WIDTH_MICRONS = 80000
 const RECEIPT_HEIGHT_MICRONS = 4000_000
 const PRINT_SETTLE_MS = 80
+/** Pre-print gate trusts the monitor's reading if it is at most this old. */
+const PRINTER_STREAM_MAX_AGE_MS = 2500
+const PRINTER_BLOCKING_STATUSES = new Set(['PAPER_OUT', 'COVER_OPEN', 'OFF'])
 const TEST_PRINT_WINDOW_WIDTH = 420
 /** 297 mm roll height in CSS px (+ headroom) — window sized by math, not DOM. */
 const TEST_PRINT_WINDOW_HEIGHT = Math.ceil((297 / 25.4) * 96) + 200
@@ -454,40 +460,66 @@ async function printReceiptSlip(meta = {}) {
     }
   }
 
-  // Force a live status query before printing to avoid spooling when already in error state
-  const printerStatus = queryPrinterStatusOnDemand(true)
-  if (printerStatus === 'PAPER_OUT' || printerStatus === 'COVER_OPEN' || printerStatus === 'OFF') {
-    console.error('[Gostationery Kiosk] Print aborted: printer hardware error', printerStatus)
-    return { success: false, errorType: `printer-${printerStatus.toLowerCase()}`, slipId: meta.slipId || undefined }
+  // A slip already handed to the printer for this order is never printed twice, even if
+  // the kiosk UI re-issues it (retry after a lost reply, renderer reload, app restart).
+  if (jobId && slipId && printedSlips.has(jobId, slipId)) {
+    const job = tokenPrintJobs.get(jobId)
+    if (job) job.printed.add(slipId)
+    mainLog('print-slip: already printed, not printing again', { jobId, slipId })
+    return { success: true, duplicate: true, slipId }
+  }
+
+  // Pre-print gate: read the monitor's latest reading (never blocks). Only if that is
+  // stale, do ONE forced read, so we never spool into a known hardware error state.
+  let printerStatus = getLatestStatus()
+  if (printerStatus.ageMs > PRINTER_STREAM_MAX_AGE_MS) {
+    printerStatus = { status: queryPrinterStatusOnDemand(true), ageMs: 0 }
+  }
+  if (PRINTER_BLOCKING_STATUSES.has(printerStatus.status)) {
+    console.error('[Gostationery Kiosk] Print aborted: printer hardware error', printerStatus.status)
+    return { success: false, errorType: `printer-${printerStatus.status.toLowerCase()}`, slipId: meta.slipId || undefined }
   }
 
   const deviceName = await resolvePrinterDeviceName()
-  let result = await printWebContents(mainWindow.webContents, deviceName)
+  const result = await printWebContents(mainWindow.webContents, deviceName)
 
-  // Wait for physical print/feed to complete and status registers to update.
-  // Kept short for throughput; still long enough for the post-print sensor re-check below.
-  await new Promise((resolve) => setTimeout(resolve, 300))
-
-  // Force a fresh DLL query — the background poll fires every 5 seconds, so if paper
-  // ran out *during* this print job the cached status might still say READY/NEAR_END.
-  const printerStatusAfter = queryPrinterStatusOnDemand(true)
-  if (result.success && (printerStatusAfter === 'PAPER_OUT' || printerStatusAfter === 'COVER_OPEN' || printerStatusAfter === 'OFF')) {
-    result.success = false
-    result.errorType = `printer-${printerStatusAfter.toLowerCase()}`
+  // Let the physical print/feed finish (async - does not hold the main thread), then
+  // verify with ONE fresh read. A bad reading is re-checked after a pause: if it persists
+  // the slip was cut short (paper ran out mid-token) and must be reprinted fresh; if it
+  // clears it was a sensor glitch after a good print and must NOT be reprinted.
+  let postStatus = getLatestStatus().status
+  if (result.success) {
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const post = await checkAfterPrint({
+      readStatus: () => queryPrinterStatusOnDemand(true),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    })
+    postStatus = post.status
+    if (!post.printed) {
+      result.success = false
+      result.errorType = `printer-${post.status.toLowerCase()}`
+    } else if (post.glitchCleared) {
+      mainLog('print-slip: transient printer fault after print cleared, not reprinting', { jobId, slipId })
+    }
   }
 
   if (result.success && jobId && slipId) {
+    // From here on this slip counts as printed and is never printed again.
+    printedSlips.add(jobId, slipId)
     const job = tokenPrintJobs.get(jobId)
     if (job) job.printed.add(slipId)
   } else if (!result.success) {
     console.error('[Gostationery Kiosk] Print failed:', result.errorType, slipId || '')
   }
 
-  try {
-    reportPrintJobResult(result.success, result.success ? null : result.errorType)
-  } catch (err) {
-    console.error('[Gostationery Kiosk] Failed to report print result to monitor:', err)
-  }
+  // Report off the print path using the status already read: no extra USB reopen.
+  setImmediate(() => {
+    try {
+      reportPrintJobResult(result.success, result.success ? null : result.errorType, postStatus)
+    } catch (err) {
+      console.error('[Gostationery Kiosk] Failed to report print result to monitor:', err)
+    }
+  })
 
   return { ...result, slipId: slipId || undefined }
 }
