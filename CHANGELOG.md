@@ -3,7 +3,12 @@
 Tracks every released version of the Gostationery Kiosk desktop app and what changed.
 Newest first. Bump `version` in `package.json` for each release and add an entry here.
 
-## 1.0.13 — 2026-10-18
+## 1.0.14 — 2026-10-22
+**Revert: 1.0.13 printer re-check removed (app not responding / freezing)**
+- `main.js` and `printer-monitor.js` are restored to the exact 1.0.12 code. Version is 1.0.14 only so the auto-updater (which never goes backwards) will deliver it.
+- The 1.0.13 "paper-out blip" debounce is gone, so the double-token-print issue it addressed can come back.
+
+## 1.0.13 — 2026-10-18 (reverted in 1.0.14)
 **Fix: double token print when the printer glitched "paper out"**
 - Cause: right after a slip printed, the paper sensor sometimes glitched to "paper out" for a split second. The app marked the already-printed slip as failed, retried it (second token) and sent a false "paper out" WhatsApp alert.
 - A paper-out / cover-open / offline reading is now re-checked every 0.5 s for up to 5 s before it is trusted. If it clears, the slip counts as printed (no second print, no alert).
