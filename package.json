@@ -45,6 +45,7 @@
       "printer-monitor.js",
       "kiosk-config-store.js",
       "printed-slips-store.js",
+      "post-print-check.js",
       "kiosk-ui/**",
       "assets/**"
     ],

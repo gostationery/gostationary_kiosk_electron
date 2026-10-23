@@ -6,8 +6,8 @@ Newest first. Bump `version` in `package.json` for each release and add an entry
 ## 1.0.15 — 2026-10-23
 **Fix: double token prints, without the freeze that broke 1.0.13**
 - A slip already printed for an order is remembered on disk (`printed-slips.json`, 24 h) and is never printed again, even if the kiosk UI re-requests it, reloads or the app restarts.
-- A printer "paper out / cover open" reading right AFTER a slip was accepted no longer fails that slip (this glitch caused the retry that printed a second token). The slip counts as printed and the org is alerted that it may be incomplete.
-- Fewer blocking printer reads: the pre-print check uses the monitor's latest reading (one forced read only if it is older than 2.5 s); the post-print forced read and the USB reopen after each job are gone; status query timeout 1500 → 700 ms. Nothing is added to the print path that waits or polls.
+- After each slip the printer is read once. If it reports paper-out / cover-open it is re-checked after 1.5 s: still faulty = the slip was cut short and is REPRINTED fresh once the printer is ready (real paper-out); cleared = a momentary sensor glitch after a good print, so it is NOT reprinted (this glitch caused the double token).
+- Fewer blocking printer reads: the pre-print check uses the monitor's latest reading (one forced read only if it is older than 2.5 s); the USB reopen after each job is gone and the result report runs off the print path; status query timeout 1500 → 700 ms. The re-check pause is an async sleep that never holds the main thread.
 
 ## 1.0.14 — 2026-10-22
 **Revert: 1.0.13 printer re-check removed (app not responding / freezing)**

@@ -26,6 +26,7 @@ const { createKioskStaticServer, KIOSK_UI_DIR } = require('./kiosk-static-server
 const { initAutoUpdater } = require('./auto-updater')
 const { startPrinterMonitor, stopPrinterMonitor, reportPrintJobResult, queryPrinterStatusOnDemand, getLatestStatus } = require('./printer-monitor')
 const { createPrintedSlipsStore } = require('./printed-slips-store')
+const { checkAfterPrint } = require('./post-print-check')
 const { createConfigStore } = require('./kiosk-config-store')
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000'
@@ -482,8 +483,28 @@ async function printReceiptSlip(meta = {}) {
   const deviceName = await resolvePrinterDeviceName()
   const result = await printWebContents(mainWindow.webContents, deviceName)
 
+  // Let the physical print/feed finish (async - does not hold the main thread), then
+  // verify with ONE fresh read. A bad reading is re-checked after a pause: if it persists
+  // the slip was cut short (paper ran out mid-token) and must be reprinted fresh; if it
+  // clears it was a sensor glitch after a good print and must NOT be reprinted.
+  let postStatus = getLatestStatus().status
+  if (result.success) {
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const post = await checkAfterPrint({
+      readStatus: () => queryPrinterStatusOnDemand(true),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    })
+    postStatus = post.status
+    if (!post.printed) {
+      result.success = false
+      result.errorType = `printer-${post.status.toLowerCase()}`
+    } else if (post.glitchCleared) {
+      mainLog('print-slip: transient printer fault after print cleared, not reprinting', { jobId, slipId })
+    }
+  }
+
   if (result.success && jobId && slipId) {
-    // Record BEFORE anything else can fail: from here on this slip counts as printed.
+    // From here on this slip counts as printed and is never printed again.
     printedSlips.add(jobId, slipId)
     const job = tokenPrintJobs.get(jobId)
     if (job) job.printed.add(slipId)
@@ -491,21 +512,10 @@ async function printReceiptSlip(meta = {}) {
     console.error('[Gostationery Kiosk] Print failed:', result.errorType, slipId || '')
   }
 
-  // Report off the print path: the monitor's reading is used as-is, no USB reopen, so
-  // the next slip is never held up and the main thread never stalls.
-  const reportedStatus = getLatestStatus().status
+  // Report off the print path using the status already read: no extra USB reopen.
   setImmediate(() => {
     try {
-      let err = result.success ? null : result.errorType
-      let ok = result.success
-      // The spooler accepted the job, so the slip WAS printed - never retry it (that is
-      // what produced double tokens when the sensor glitched). If the printer now reads
-      // paper-out/cover-open, flag the job so the org is told it may be cut short.
-      if (ok && PRINTER_BLOCKING_STATUSES.has(reportedStatus)) {
-        ok = false
-        err = `possibly-incomplete:printer-${reportedStatus.toLowerCase()}`
-      }
-      reportPrintJobResult(ok, err, reportedStatus)
+      reportPrintJobResult(result.success, result.success ? null : result.errorType, postStatus)
     } catch (err) {
       console.error('[Gostationery Kiosk] Failed to report print result to monitor:', err)
     }
