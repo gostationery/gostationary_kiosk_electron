@@ -322,6 +322,10 @@ function resolveDevicePath(windowsPrinterName) {
 
 let lastStatus = 'UNKNOWN';
 let currentStatus = 'UNKNOWN';
+let currentStatusAt = 0; // ms timestamp of the last reading, so callers can tell how fresh it is
+// Short enough that a busy/stalled printer cannot hold the main thread for seconds;
+// still far above a healthy printer's real-time response (tens of ms).
+const STATUS_QUERY_TIMEOUT_MS = 700;
 let lastHeartbeatAt = 0;
 let appConfig = null;
 let activePrinterName = ''; // Windows spooler name of the currently monitored printer
@@ -434,9 +438,9 @@ function reopenHandleFresh() {
 function getPrinterStatus() {
   if (!Pos_QueryStstus) return 'OFF';
   try {
-    const t1 = Buffer.alloc(4); Pos_QueryStstus(t1, 1, 1500);
-    const t2 = Buffer.alloc(4); Pos_QueryStstus(t2, 2, 1500); // queried for protocol; not used for detection
-    const t4 = Buffer.alloc(4); Pos_QueryStstus(t4, 4, 1500);
+    const t1 = Buffer.alloc(4); Pos_QueryStstus(t1, 1, STATUS_QUERY_TIMEOUT_MS);
+    const t2 = Buffer.alloc(4); Pos_QueryStstus(t2, 2, STATUS_QUERY_TIMEOUT_MS); // queried for protocol; not used for detection
+    const t4 = Buffer.alloc(4); Pos_QueryStstus(t4, 4, STATUS_QUERY_TIMEOUT_MS);
 
     mainLog(`[Printer Status] t1=0x${t1[0].toString(16).padStart(2,'0')} t2=0x${t2[0].toString(16).padStart(2,'0')} t4=0x${t4[0].toString(16).padStart(2,'0')}`);
 
@@ -661,7 +665,7 @@ function startPrinterMonitor(config, loggerFn) {
     initialStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF';
   }
   lastStatus = initialStatus;
-  currentStatus = initialStatus;
+  currentStatus = initialStatus; currentStatusAt = Date.now();
   lastHeartbeatAt = 0; // force first interval tick to send immediately
   let lastRediscoverAt = Date.now();
   sendUpdateToBackend(initialStatus, stats.printed, stats.failed);
@@ -672,12 +676,12 @@ function startPrinterMonitor(config, loggerFn) {
 
     if (!hasDll) {
       const { anyPresent } = resolveDevicePath(activePrinterName);
-      currentStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF';
+      currentStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF'; currentStatusAt = Date.now();
     } else if (reopenHandleFresh()) {
       // Reopen a FRESH handle every poll before reading so the DLL doesn't return
       // stale buffered status. The cached device path makes this a cheap local USB
       // open (no PowerShell rescan) on the healthy path.
-      currentStatus = getPrinterStatus();
+      currentStatus = getPrinterStatus(); currentStatusAt = Date.now();
     } else {
       // No live handle: distinguish wrong-printer from nothing-connected, and
       // periodically drop the path cache so a (re)plugged printer is rediscovered
@@ -687,7 +691,7 @@ function startPrinterMonitor(config, loggerFn) {
         lastRediscoverAt = Date.now();
       }
       const { anyPresent } = resolveDevicePath(activePrinterName);
-      currentStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF';
+      currentStatus = anyPresent ? 'NOT_SUPPORTED' : 'OFF'; currentStatusAt = Date.now();
     }
 
     const statusChanged = currentStatus !== lastStatus;
@@ -733,7 +737,14 @@ function stopPrinterMonitor() {
   printerConnected = false;
 }
 
-function reportPrintJobResult(success, errorMsg = null) {
+/**
+ * @param {boolean} success
+ * @param {string|null} [errorMsg]
+ * @param {string|null} [knownStatus] - printer status the caller already has; when
+ *   omitted the monitor's latest reading is used. Never opens the USB port here:
+ *   this runs right after every slip and must not block the main thread.
+ */
+function reportPrintJobResult(success, errorMsg = null, knownStatus = null) {
   checkDailyReset();
   if (success) {
     stats.printed++;
@@ -742,11 +753,12 @@ function reportPrintJobResult(success, errorMsg = null) {
   }
   saveStatsToConfig();
   sendPrintJobLog(success, errorMsg);
-  // Immediately report job completion update to backend. Reopen a fresh handle so
-  // the status reflects the printer right now (a reused handle can be stale, e.g.
-  // paper that ran out on this very job).
-  const status = reopenHandleFresh() ? getPrinterStatus() : 'OFF';
-  sendUpdateToBackend(status, stats.printed, stats.failed, errorMsg);
+  sendUpdateToBackend(knownStatus || currentStatus, stats.printed, stats.failed, errorMsg);
+}
+
+/** Latest reading from the background monitor, with its age. Never blocks. */
+function getLatestStatus() {
+  return { status: currentStatus, ageMs: currentStatusAt ? Date.now() - currentStatusAt : Infinity };
 }
 
 /**
@@ -775,7 +787,7 @@ function queryPrinterStatusOnDemand(forceRefresh = false, printerNameOverride = 
       // never races with the poll's own reopen (no concurrent second handle).
       if (Pos_QueryStstus && reopenHandleFresh()) {
         const fresh = getPrinterStatus();
-        currentStatus = fresh;
+        currentStatus = fresh; currentStatusAt = Date.now();
         return fresh;
       }
       return currentStatus;
@@ -824,9 +836,9 @@ function queryPrinterStatusOnDemand(forceRefresh = false, printerNameOverride = 
 
     let status = 'READY';
     if (Pos_QueryStstus) {
-      const t1 = Buffer.alloc(4); Pos_QueryStstus(t1, 1, 1500);
-      const t2 = Buffer.alloc(4); Pos_QueryStstus(t2, 2, 1500);
-      const t4 = Buffer.alloc(4); Pos_QueryStstus(t4, 4, 1500);
+      const t1 = Buffer.alloc(4); Pos_QueryStstus(t1, 1, STATUS_QUERY_TIMEOUT_MS);
+      const t2 = Buffer.alloc(4); Pos_QueryStstus(t2, 2, STATUS_QUERY_TIMEOUT_MS);
+      const t4 = Buffer.alloc(4); Pos_QueryStstus(t4, 4, STATUS_QUERY_TIMEOUT_MS);
 
       mainLog(`[Printer OnDemand] Raw: t1=0x${t1[0].toString(16).padStart(2,'0')} t2=0x${t2[0].toString(16).padStart(2,'0')} t4=0x${t4[0].toString(16).padStart(2,'0')}`);
 
@@ -855,6 +867,7 @@ module.exports = {
   startPrinterMonitor,
   stopPrinterMonitor,
   reportPrintJobResult,
+  getLatestStatus,
   queryPrinterStatusOnDemand,
   enumDevicePaths,       // exposed for diagnostics / tests
   enumPnpPrinterDevices, // exposed for diagnostics / tests
